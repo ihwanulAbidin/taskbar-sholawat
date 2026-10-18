@@ -1,0 +1,16 @@
+bin/
+obj/
+publish/
+*.user
+.vs/
+
+# Berkas lokal (CLAUDE3.md bagian 53)
+DECISIONS.md
+.env
+.env.*
+
+# Data portable runtime — model diunduh pengguna, jangan dibundel (PLAN bagian 7)
+models/
+*.bin
+selftest.log
+settings.json
