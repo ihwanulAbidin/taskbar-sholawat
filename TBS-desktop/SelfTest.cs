@@ -15,6 +15,7 @@ namespace TaskbarSholawat;
 /// dan Whisper.net memuat native + model dari models/.
 /// Pemakaian: TaskbarSholawat.exe --selftest [--wav berkas.wav] [--lang ar]
 /// M3: --selftest --media [--seconds 60] → probe GSMTC (<see cref="MediaProbe"/>).
+/// M5: --selftest --capture [--process chrome|auto] [--seconds 30] → probe loopback (<see cref="CaptureProbe"/>).
 /// Hasil ditulis ke selftest.log di samping exe (WinExe tidak punya konsol).
 /// </summary>
 public static class SelfTest
@@ -23,6 +24,8 @@ public static class SelfTest
     {
         if (args.Contains("--media"))
             return await MediaProbe.RunAsync(args);
+        if (args.Contains("--capture"))
+            return await CaptureProbe.RunAsync(args);
 
         var log = new StringBuilder();
         void Log(string msg) => log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {msg}");
