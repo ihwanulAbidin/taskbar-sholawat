@@ -14,12 +14,16 @@ namespace TaskbarSholawat;
 /// Uji risiko M0: exe single-file berjalan tanpa .NET terpasang, WPF merender teks Arab,
 /// dan Whisper.net memuat native + model dari models/.
 /// Pemakaian: TaskbarSholawat.exe --selftest [--wav berkas.wav] [--lang ar]
+/// M3: --selftest --media [--seconds 60] → probe GSMTC (<see cref="MediaProbe"/>).
 /// Hasil ditulis ke selftest.log di samping exe (WinExe tidak punya konsol).
 /// </summary>
 public static class SelfTest
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Contains("--media"))
+            return await MediaProbe.RunAsync(args);
+
         var log = new StringBuilder();
         void Log(string msg) => log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {msg}");
         var failed = false;
@@ -128,7 +132,7 @@ public static class SelfTest
             throw new InvalidOperationException("Transkripsi tidak menghasilkan segmen");
     }
 
-    private static string? ArgValue(string[] args, string name)
+    internal static string? ArgValue(string[] args, string name)
     {
         var i = Array.IndexOf(args, name);
         return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
