@@ -5,10 +5,12 @@ using System.IO;
 namespace TaskbarSholawat;
 
 /// <summary>
-/// Uji AsrWorker pada audio yang sedang diputar.
+/// Uji AsrWorker pada audio yang sedang diputar, atau (--wav) pada berkas WAV 16 kHz mono agar bisa diulang.
 /// Pemakaian: TaskbarSholawat.exe --selftest --asr [--seconds 60] [--model path] [--prompt-file f]
 ///   [--process chrome|auto] [--hop 3] [--window 8] [--beam 0] [--threads 0] [--audio-ctx 0] [--silence 0.003]
+///   [--temp-inc 0.2] [--max-tokens 0] [--wav berkas.wav]
 /// → asr.log di samping exe. Tanpa --process = loopback sistem; tanpa --model = *.bin pertama di models/.
+/// Mode --wav: jendela digeser per hop di sepanjang berkas dan diproses berurutan (tanpa jam dinding).
 /// </summary>
 public static class AsrProbe
 {
@@ -40,9 +42,15 @@ public static class AsrProbe
                 BeamSize = IntArg(args, "--beam", 0),
                 Threads = IntArg(args, "--threads", 0),
                 AudioContext = IntArg(args, "--audio-ctx", 0),
+                TemperatureInc = SelfTest.ArgValue(args, "--temp-inc") is null ? null : (float)DoubleArg(args, "--temp-inc", 0.2),
+                MaxTokensPerSegment = IntArg(args, "--max-tokens", 0),
                 SilenceRms = DoubleArg(args, "--silence", 0.003),
                 Prompt = promptFile is null ? null : await File.ReadAllTextAsync(promptFile),
             };
+
+            Log($"Model: {model} ({new FileInfo(model).Length / 1024 / 1024} MB); hop {options.Hop.TotalSeconds} s, jendela {options.Window.TotalSeconds} s, beam {options.BeamSize}, threads {options.Threads}, audio-ctx {options.AudioContext}, temp-inc {options.TemperatureInc?.ToString(CultureInfo.InvariantCulture) ?? "default"}, max-tokens {options.MaxTokensPerSegment}, ambang RMS {options.SilenceRms}, prompt {(options.Prompt is null ? "tidak ada" : $"{options.Prompt.Length} karakter")}");
+            if (SelfTest.ArgValue(args, "--wav") is { } wav)
+                return await RunFileAsync(wav, options, Log);
 
             using var media = await MediaInfo.CreateAsync();
             var source = CaptureSource.System;
@@ -58,7 +66,6 @@ public static class AsrProbe
             if (await media.ReadCurrentAsync() is { } snap)
                 Log($"Media: {snap.AppId} | {snap.Status} | \"{snap.Title}\"");
             Log($"Audio: {capture.Description}");
-            Log($"Model: {model} ({new FileInfo(model).Length / 1024 / 1024} MB); hop {options.Hop.TotalSeconds} s, jendela {options.Window.TotalSeconds} s, beam {options.BeamSize}, threads {options.Threads}, audio-ctx {options.AudioContext}, ambang RMS {options.SilenceRms}, prompt {(options.Prompt is null ? "tidak ada" : $"{options.Prompt.Length} karakter")}");
 
             using var self = Process.GetCurrentProcess();
             var cpuLast = self.TotalProcessorTime;
@@ -115,11 +122,8 @@ public static class AsrProbe
             var cpuAvg = (self.TotalProcessorTime - cpuStart).TotalMilliseconds / wallTotal.Elapsed.TotalMilliseconds * 100;
             lock (gate)
             {
-                var sorted = latencies.Order().ToList();
-                Log($"Ringkasan: {sorted.Count} jendela diproses, {silent} senyap, {skippedHops} hop dibuang, {failed} gagal");
-                if (sorted.Count > 0)
-                    Log($"Latensi ms: min {sorted[0]}, median {sorted[sorted.Count / 2]}, maks {sorted[^1]}, rata-rata {sorted.Average():0}");
-                Log($"CPU proses rata-rata: {cpuAvg:0.0}% satu core = {cpuAvg / Environment.ProcessorCount:0.0}% total ({Environment.ProcessorCount} core)");
+                Log($"Ringkasan: {latencies.Count} jendela diproses, {silent} senyap, {skippedHops} hop dibuang, {failed} gagal");
+                LogSummary(latencies, cpuAvg, Log);
             }
             Log($"HASIL: {(latencies.Count > 0 && failed == 0 ? "OK" : "GAGAL")}");
             return latencies.Count > 0 && failed == 0 ? 0 : 1;
@@ -130,6 +134,66 @@ public static class AsrProbe
             return 1;
         }
     }
+
+    private static async Task<int> RunFileAsync(string path, AsrOptions options, Action<FormattableString> log)
+    {
+        float[] audio;
+        using (var reader = new NAudio.Wave.WaveFileReader(path))
+        {
+            if (reader.WaveFormat.SampleRate != AudioCapture.SampleRate || reader.WaveFormat.Channels != 1)
+                throw new NotSupportedException($"WAV {reader.WaveFormat} — diharapkan {AudioCapture.SampleRate} Hz mono");
+            var provider = NAudio.Wave.WaveExtensionMethods.ToSampleProvider(reader);
+            var buffer = new List<float>((int)reader.SampleCount);
+            var chunk = new float[AudioCapture.SampleRate];
+            int n;
+            while ((n = provider.Read(chunk.AsSpan())) > 0)
+                buffer.AddRange(chunk.AsSpan(0, n));
+            audio = buffer.ToArray();
+        }
+        log($"WAV: {path} ({audio.Length / (double)AudioCapture.SampleRate:0.0} s)");
+
+        var window = (int)(options.Window.TotalSeconds * AudioCapture.SampleRate);
+        var hop = (int)(options.Hop.TotalSeconds * AudioCapture.SampleRate);
+        var latencies = new List<long>();
+        using var self = Process.GetCurrentProcess();
+        var load = Stopwatch.StartNew();
+        await using var engine = AsrEngine.Load(options);
+        log($"Model dimuat dalam {load.ElapsedMilliseconds} ms; kolom: offset berkas | ms proses | segmen | teks");
+        self.Refresh();
+        var cpuStart = self.TotalProcessorTime;
+        var wall = Stopwatch.StartNew();
+        for (var end = Math.Min(window, audio.Length); end <= audio.Length; end += hop)
+        {
+            var samples = audio[Math.Max(0, end - window)..end];
+            var rms = AsrWorker.Rms(samples);
+            if (rms < options.SilenceRms)
+            {
+                log($"{Sec(end - samples.Length)}–{Sec(end)} senyap (RMS {rms:0.00000}) — dilewati");
+                continue;
+            }
+            var (segments, ms) = await engine.TranscribeAsync(samples);
+            latencies.Add(ms);
+            log($"{Sec(end - samples.Length)}–{Sec(end)} | {ms} ms | {segments.Count} | {AsrWorker.JoinText(segments)}");
+        }
+        self.Refresh();
+        var cpu = (self.TotalProcessorTime - cpuStart).TotalMilliseconds / wall.Elapsed.TotalMilliseconds * 100;
+        log($"Ringkasan: {latencies.Count} jendela diproses berurutan dalam {wall.Elapsed.TotalSeconds:0.0} s");
+        // CPU di mode file = selama inferensi tanpa jeda (bukan beban live)
+        LogSummary(latencies, cpu, log);
+        log($"HASIL: {(latencies.Count > 0 ? "OK" : "GAGAL")}");
+        return latencies.Count > 0 ? 0 : 1;
+    }
+
+    private static void LogSummary(List<long> latencies, double cpu, Action<FormattableString> log)
+    {
+        var sorted = latencies.Order().ToList();
+        if (sorted.Count > 0)
+            log($"Latensi ms: min {sorted[0]}, median {sorted[sorted.Count / 2]}, maks {sorted[^1]}, rata-rata {sorted.Average():0}");
+        log($"CPU proses rata-rata: {cpu:0.0}% satu core = {cpu / Environment.ProcessorCount:0.0}% total ({Environment.ProcessorCount} core)");
+    }
+
+    private static string Sec(int samples) =>
+        string.Create(CultureInfo.InvariantCulture, $"{samples / (double)AudioCapture.SampleRate:0.0}");
 
     private static int IntArg(string[] args, string name, int fallback) =>
         int.TryParse(SelfTest.ArgValue(args, name), CultureInfo.InvariantCulture, out var v) ? v : fallback;

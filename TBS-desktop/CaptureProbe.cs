@@ -44,6 +44,10 @@ public static class CaptureProbe
             }
 
             await using var capture = await AudioCapture.StartAsync(source, pid);
+            // Posisi media (GSMTC, terekstrapolasi) untuk menyelaraskan WAV dengan lirik
+            using var mediaInfo = await MediaInfo.CreateAsync();
+            if (await mediaInfo.ReadCurrentAsync() is { } m)
+                Log($"Media: {m.AppId} | {m.Status} | \"{m.Title}\" | posisi {Fmt(m.PositionAt(DateTimeOffset.Now))}");
             capture.Stopped += ex => Log($"STOPPED {ex?.Message ?? "(diminta)"}");
             Log($"Mulai: {capture.Description}, {seconds} s; kolom per detik: peak dBFS | RMS dBFS | paket | diskontinuitas | celah diisi");
 
@@ -71,6 +75,13 @@ public static class CaptureProbe
                 : 0;
             var total = capture.GetStats();
             var clip = capture.GetLatest(TimeSpan.FromSeconds(Math.Min(seconds, AudioCapture.BufferLength.TotalSeconds)));
+            if (await mediaInfo.ReadCurrentAsync() is { } mEnd)
+            {
+                var endPos = mEnd.PositionAt(DateTimeOffset.Now);
+                var clipLen = TimeSpan.FromSeconds(clip.Length / (double)AudioCapture.SampleRate);
+                var startPos = mEnd.IsPlaying ? endPos - clipLen * mEnd.PlaybackRate : endPos;
+                Log($"Media: WAV ≈ posisi {Fmt(startPos < TimeSpan.Zero ? TimeSpan.Zero : startPos)}–{Fmt(endPos)} (ekstrapolasi GSMTC, {mEnd.Status})");
+            }
             var wav = Path.Combine(PortablePaths.AppDir, "capture.wav");
             await using (var wf = new WaveFileWriter(wav, new WaveFormat(AudioCapture.SampleRate, 16, 1)))
                 wf.WriteSamples(clip, 0, clip.Length);
@@ -88,6 +99,9 @@ public static class CaptureProbe
             return 1;
         }
     }
+
+    private static string Fmt(TimeSpan t) =>
+        string.Create(CultureInfo.InvariantCulture, $"{(int)t.TotalMinutes}:{t:ss\\.f}");
 
     private static float Peak(float[] x) => x.Length == 0 ? 0 : x.Max(Math.Abs);
 
