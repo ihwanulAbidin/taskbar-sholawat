@@ -3,6 +3,8 @@ obj/
 publish/
 *.user
 .vs/
+# git worktree per executor (koordinasi multi-sesi)
+.worktrees/
 
 # Berkas lokal (CLAUDE3.md bagian 53)
 DECISIONS.md
@@ -11,6 +13,8 @@ DECISIONS.md
 
 # Data portable runtime — model diunduh pengguna, jangan dibundel (PLAN bagian 7)
 models/
+# Pustaka lirik lokal untuk uji (teks dari sumber luar — PLAN bagian 6, jangan dibundel)
+library-local/
 *.bin
 selftest.log
 settings.json

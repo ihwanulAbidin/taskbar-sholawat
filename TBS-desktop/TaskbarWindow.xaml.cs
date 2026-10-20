@@ -1,25 +1,24 @@
 using System.Windows;
-using System.Windows.Media;
 using Deskband11Lib.Wpf;
 using Microsoft.Win32;
 
 namespace TaskbarSholawat;
 
 /// <summary>
-/// Mode A (PLAN bagian 3.2 TaskbarHost): baris Arab + terjemah di dalam taskbar.
+/// Mode A (PLAN bagian 3.2 TaskbarHost): baris Arab + terjemah di dalam taskbar bawah/atas.
 /// Penempatan di celah kosong taskbar, pemulihan saat explorer restart, dan perubahan DPI
 /// ditangani Deskband11Lib; jendela ini hanya isi dan tema.
 /// </summary>
 public partial class TaskbarWindow : Window
 {
-    private const string PersonalizeKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
-
     public TaskbarContentHost Host { get; }
+
+    public LyricView LyricView => Lyric;
 
     public TaskbarWindow()
     {
         InitializeComponent();
-        Host = new TaskbarContentHost(this, Root, new()
+        Host = new TaskbarContentHost(this, Lyric, new()
         {
             PreferredWidth = double.MaxValue,
             // Polling UIA hanya cadangan; perubahan ikon dipicu TaskbarChangeWatcher (App)
@@ -29,26 +28,22 @@ public partial class TaskbarWindow : Window
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
     }
 
-    public void ShowLine(string arabic, string? translation)
-    {
-        Arabic.Text = arabic;
-        Translation.Text = translation ?? "";
-        Translation.Visibility = string.IsNullOrEmpty(translation) ? Visibility.Collapsed : Visibility.Visible;
-    }
-
     public Task AttachAsync() => Host.AttachWhenLayoutReadyAsync();
 
-    /// <summary>Warna teks mengikuti tema taskbar (SystemUsesLightTheme), bukan tema aplikasi.</summary>
-    private void ApplyTheme()
+    /// <summary>
+    /// Tinggi terkunci taskbar (48 px pada 100%). ≤ 1: kedua baris mengecil. &gt; 1: baris Arab
+    /// membesar memakai seluruh tinggi (Viewbox membatasi), terjemah pindah ke tooltip.
+    /// </summary>
+    public void SetTextScale(double scale)
     {
-        var light = Registry.GetValue(PersonalizeKey, "SystemUsesLightTheme", 0) is int v && v != 0;
-        Foreground = light ? new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)) : Brushes.White;
+        Lyric.SetTextScale(scale);
+        Lyric.TranslationInTooltip = scale > 1;
     }
+
+    private void ApplyTheme() => Foreground = TaskbarTheme.Foreground;
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e) =>
         Dispatcher.BeginInvoke(ApplyTheme);
-
-    private void OnExitClick(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
     protected override void OnClosed(EventArgs e)
     {

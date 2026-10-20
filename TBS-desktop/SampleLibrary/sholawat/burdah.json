@@ -1,0 +1,24 @@
+{
+  "id": "burdah",
+  "titles": ["Qasidah Burdah", "Burdah", "Al-Burdah", "Maula Ya Sholli", "Maulaya Sholli Wasallim", "البردة", "قصيدة البردة"],
+  "source": "Qasidah al-Burdah (al-Kawakib ad-Durriyyah), Imam Syarafuddin al-Bushiri (w. 696 H). Teks Arab bait 1–3 dicocokkan dengan ar.wikisource.org; harakat & terjemah Indonesia ditulis sendiri untuk contoh ini",
+  "license": "domain publik (teks Arab); terjemah: buatan sendiri",
+  "lines": [
+    {
+      "ar": "مَوْلَايَ صَلِّ وَسَلِّمْ دَائِمًا أَبَدًا، عَلَى حَبِيبِكَ خَيْرِ الْخَلْقِ كُلِّهِمِ",
+      "id": "Wahai Tuhanku, limpahkanlah sholawat dan salam selamanya kepada kekasih-Mu, sebaik-baik seluruh makhluk"
+    },
+    {
+      "ar": "أَمِنْ تَذَكُّرِ جِيرَانٍ بِذِي سَلَمِ، مَزَجْتَ دَمْعًا جَرَى مِنْ مُقْلَةٍ بِدَمِ",
+      "id": "Apakah karena teringat para tetangga di Dzi Salam, engkau campurkan air mata yang mengalir dari kelopak mata dengan darah?"
+    },
+    {
+      "ar": "أَمْ هَبَّتِ الرِّيحُ مِنْ تِلْقَاءِ كَاظِمَةٍ، وَأَوْمَضَ الْبَرْقُ فِي الظَّلْمَاءِ مِنْ إِضَمِ",
+      "id": "Ataukah karena angin berembus dari arah Kazhimah, dan kilat berkilau dalam gelap dari Idham?"
+    },
+    {
+      "ar": "فَمَا لِعَيْنَيْكَ إِنْ قُلْتَ اكْفُفَا هَمَتَا، وَمَا لِقَلْبِكَ إِنْ قُلْتَ اسْتَفِقْ يَهِمِ",
+      "id": "Mengapa kedua matamu, bila kau katakan \"berhentilah\", justru makin deras? Dan hatimu, bila kau katakan \"sadarlah\", justru makin gundah?"
+    }
+  ]
+}

@@ -13,4 +13,9 @@ public static class PortablePaths
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
 
     public static string Models => Path.Combine(AppDir, "models");
+
+    public static string Settings => Path.Combine(AppDir, "settings.json");
+
+    /// <summary>Pustaka lirik pengguna (PLAN bagian 4), termasuk cache lirik hasil fetch.</summary>
+    public static string Library => Path.Combine(AppDir, "library");
 }

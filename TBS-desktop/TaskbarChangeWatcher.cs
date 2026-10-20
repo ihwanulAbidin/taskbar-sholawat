@@ -1,33 +1,42 @@
-using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using static TaskbarSholawat.NativeMethods;
 
 namespace TaskbarSholawat;
 
 /// <summary>
-/// Memberi tahu saat tombol aplikasi di taskbar bertambah/berkurang (jendela muncul/hilang),
-/// lewat shell hook — sinyal yang sama yang dipakai taskbar.
-/// Alasan: Deskband11Lib mengukur ikon taskbar dengan UI Automation (FindAll seluruh pohon)
-/// tiap LayoutRefreshInterval; polling 500 ms memakan ±14% CPU aplikasi + ±11% CPU explorer
-/// (satu core, diukur M1). Dengan watcher ini polling cukup jarang.
+/// Jendela tersembunyi penerima sinyal shell:
+/// <list type="bullet">
+/// <item><see cref="Changed"/> — tombol aplikasi di taskbar bertambah/berkurang (shell hook). Alasan:
+/// Deskband11Lib mengukur ikon taskbar dengan UI Automation (FindAll seluruh pohon) tiap
+/// LayoutRefreshInterval; polling 500 ms memakan ±14% CPU aplikasi + ±11% CPU explorer
+/// (satu core, diukur M1). Dengan sinyal ini polling cukup jarang.</item>
+/// <item><see cref="WorkAreaChanged"/> — taskbar pindah sisi / AppBar lain berubah (WM_SETTINGCHANGE SPI_SETWORKAREA).</item>
+/// <item><see cref="TaskbarCreated"/> — explorer restart; pendaftaran AppBar hilang.</item>
+/// <item><see cref="CloseRequested"/> — WM_CLOSE dari luar (mis. taskkill tanpa /F).</item>
+/// </list>
 /// </summary>
-public sealed partial class TaskbarChangeWatcher : IDisposable
+public sealed class TaskbarChangeWatcher : IDisposable
 {
     private const int HSHELL_WINDOWCREATED = 1;
     private const int HSHELL_WINDOWDESTROYED = 2;
     private const int HSHELL_WINDOWREPLACED = 13;
-    private const int WS_EX_TOOLWINDOW = 0x80;
 
     private readonly HwndSource _source;
     private readonly int _shellHookMessage;
-    // Animasi geser ikon taskbar perlu waktu; kumpulkan event beruntun jadi satu
-    private readonly DispatcherTimer _settle = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    private readonly int _taskbarCreatedMessage;
+    // Animasi geser ikon / perpindahan taskbar memicu event beruntun; kumpulkan jadi satu
+    private readonly DispatcherTimer _buttonsSettle = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    private readonly DispatcherTimer _workAreaSettle = new() { Interval = TimeSpan.FromMilliseconds(400) };
 
     public event Action? Changed;
+    public event Action? WorkAreaChanged;
+    public event Action? TaskbarCreated;
+    public event Action? CloseRequested;
 
     public TaskbarChangeWatcher()
     {
-        // Jendela top-level tersembunyi (tanpa WS_VISIBLE) khusus penerima pesan shell hook
+        // Top-level tanpa WS_VISIBLE: tetap menerima pesan broadcast (WM_SETTINGCHANGE, TaskbarCreated)
         _source = new HwndSource(new HwndSourceParameters("TaskbarSholawat.ShellHook")
         {
             Width = 0,
@@ -37,40 +46,49 @@ public sealed partial class TaskbarChangeWatcher : IDisposable
         });
         _source.AddHook(WndProc);
         _shellHookMessage = RegisterWindowMessage("SHELLHOOK");
+        _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
         RegisterShellHookWindow(_source.Handle);
 
-        _settle.Tick += (_, _) =>
+        _buttonsSettle.Tick += (_, _) =>
         {
-            _settle.Stop();
+            _buttonsSettle.Stop();
             Changed?.Invoke();
+        };
+        _workAreaSettle.Tick += (_, _) =>
+        {
+            _workAreaSettle.Stop();
+            WorkAreaChanged?.Invoke();
         };
     }
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
         if (msg == _shellHookMessage && (wParam & 0x7FFF) is HSHELL_WINDOWCREATED or HSHELL_WINDOWDESTROYED or HSHELL_WINDOWREPLACED)
+            Restart(_buttonsSettle);
+        else if (msg == WM_SETTINGCHANGE && wParam == SPI_SETWORKAREA)
+            Restart(_workAreaSettle);
+        else if (msg == _taskbarCreatedMessage)
+            TaskbarCreated?.Invoke();
+        else if (msg == WM_CLOSE)
         {
-            _settle.Stop();
-            _settle.Start();
+            // Bawaan DefWindowProc menghancurkan jendela ini diam-diam dan proses tetap hidup
+            handled = true;
+            CloseRequested?.Invoke();
         }
         return 0;
     }
 
+    private static void Restart(DispatcherTimer timer)
+    {
+        timer.Stop();
+        timer.Start();
+    }
+
     public void Dispose()
     {
-        _settle.Stop();
+        _buttonsSettle.Stop();
+        _workAreaSettle.Stop();
         DeregisterShellHookWindow(_source.Handle);
         _source.Dispose();
     }
-
-    [LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16)]
-    private static partial int RegisterWindowMessage(string message);
-
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool RegisterShellHookWindow(nint hwnd);
-
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DeregisterShellHookWindow(nint hwnd);
 }

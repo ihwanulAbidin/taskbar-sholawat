@@ -1,0 +1,9 @@
+{
+  "id": "contoh-burdah",
+  "note": "CONTOH format saja — bukan rekaman nyata. Waktu di sini dan di contoh-burdah-1.lrc FIKTIF",
+  "match": { "titleContains": ["contoh burdah taskbar sholawat"], "durationSec": 120 },
+  "segments": [
+    { "start": 0.0, "end": 75.0, "sholawat": "burdah", "timing": "contoh-burdah-1.lrc" },
+    { "start": 75.0, "end": 120.0, "sholawat": "burdah" }
+  ]
+}

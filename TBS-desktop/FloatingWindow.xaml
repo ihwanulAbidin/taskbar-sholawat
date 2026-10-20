@@ -1,0 +1,16 @@
+<Window x:Class="TaskbarSholawat.FloatingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:TaskbarSholawat"
+        Title="Taskbar Sholawat"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        ShowInTaskbar="False" ShowActivated="False" Topmost="True"
+        Foreground="White">
+    <!-- Mode C: gaya subtitle — teks putih di atas latar gelap semi-transparan supaya terbaca
+         di atas konten apa pun (tidak ikut tema taskbar). Klik-tarik untuk menggeser. -->
+    <Border CornerRadius="8" Background="#B3000000" Padding="12,4"
+            MouseLeftButtonDown="OnMouseLeftButtonDown">
+        <local:LyricView x:Name="Lyric" />
+    </Border>
+</Window>
