@@ -17,6 +17,7 @@ namespace TaskbarSholawat;
 /// M3: --selftest --media [--seconds 60] → probe GSMTC (<see cref="MediaProbe"/>).
 /// M5: --selftest --capture [--process chrome|auto] [--seconds 30] → probe loopback (<see cref="CaptureProbe"/>).
 /// Alur pengenalan 1–3: --selftest --source → judul, sumber, URL, description (<see cref="SourceProbe"/>).
+/// Langkah 5 (audio→teks): --selftest --asr [--seconds 60] [--model path] [--prompt-file f] … (<see cref="AsrProbe"/>).
 /// Hasil ditulis ke selftest.log di samping exe (WinExe tidak punya konsol).
 /// </summary>
 public static class SelfTest
@@ -29,6 +30,8 @@ public static class SelfTest
             return await CaptureProbe.RunAsync(args);
         if (args.Contains("--source"))
             return await SourceProbe.RunAsync(args);
+        if (args.Contains("--asr"))
+            return await AsrProbe.RunAsync(args);
 
         var log = new StringBuilder();
         void Log(string msg) => log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {msg}");
