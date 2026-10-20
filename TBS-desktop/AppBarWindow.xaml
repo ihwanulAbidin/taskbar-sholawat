@@ -1,0 +1,10 @@
+<Window x:Class="TaskbarSholawat.AppBarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:TaskbarSholawat"
+        Title="Taskbar Sholawat" Width="480" Height="48"
+        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False"
+        ShowActivated="False" Topmost="True">
+    <!-- Mode B: strip AppBar; posisi & ukuran diatur AppBarWindow.SetPosition dalam piksel fisik -->
+    <local:LyricView x:Name="Lyric" />
+</Window>

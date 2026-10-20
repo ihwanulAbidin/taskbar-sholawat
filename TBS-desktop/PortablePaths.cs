@@ -13,4 +13,6 @@ public static class PortablePaths
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
 
     public static string Models => Path.Combine(AppDir, "models");
+
+    public static string Settings => Path.Combine(AppDir, "settings.json");
 }
