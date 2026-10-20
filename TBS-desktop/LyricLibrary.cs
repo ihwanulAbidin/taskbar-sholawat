@@ -72,7 +72,7 @@ public sealed class LyricLibrary
             .ToList();
     }
 
-    public static string DefaultDir => Path.Combine(PortablePaths.AppDir, "library");
+    public static string DefaultDir => PortablePaths.Library;
 
     public IReadOnlyCollection<Sholawat> Sholawat => _sholawat.Values;
 
