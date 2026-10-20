@@ -16,6 +16,7 @@ namespace TaskbarSholawat;
 /// Pemakaian: TaskbarSholawat.exe --selftest [--wav berkas.wav] [--lang ar]
 /// M3: --selftest --media [--seconds 60] → probe GSMTC (<see cref="MediaProbe"/>).
 /// M5: --selftest --capture [--process chrome|auto] [--seconds 30] → probe loopback (<see cref="CaptureProbe"/>).
+/// Alur pengenalan 1–3: --selftest --source → judul, sumber, URL, description (<see cref="SourceProbe"/>).
 /// Hasil ditulis ke selftest.log di samping exe (WinExe tidak punya konsol).
 /// </summary>
 public static class SelfTest
@@ -26,6 +27,8 @@ public static class SelfTest
             return await MediaProbe.RunAsync(args);
         if (args.Contains("--capture"))
             return await CaptureProbe.RunAsync(args);
+        if (args.Contains("--source"))
+            return await SourceProbe.RunAsync(args);
 
         var log = new StringBuilder();
         void Log(string msg) => log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {msg}");
