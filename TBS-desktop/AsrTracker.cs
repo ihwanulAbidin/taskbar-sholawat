@@ -40,15 +40,16 @@ public readonly record struct AsrTrackerState(AsrTrackerStatus Status, Sholawat?
 /// <summary>
 /// Histeresis hasil <see cref="AsrMatcher"/> per potongan (disiapkan untuk SyncEngine M8): tampilan tidak
 /// berpindah sholawat karena satu potongan yang mirip sholawat lain, dan disembunyikan saat beberapa
-/// potongan berturut-turut tidak yakin. Dengan <paramref name="knownText"/> (hasil
-/// <see cref="AsrMatcher.Align"/>), sholawat tetap dan yang dilacak hanya baris; Hidden = baris tidak diketahui
-/// (tampilkan judul saja).
+/// potongan berturut-turut tidak yakin. Dengan <paramref name="knownTexts"/> (hasil
+/// <see cref="AsrMatcher.Align"/>; satu teks, atau 2–3 untuk medley) yang dilacak hanya teks + baris di dalam
+/// himpunan itu; Hidden = baris tidak diketahui (tampilkan judul saja).
 /// </summary>
-public sealed class AsrTracker(AsrTrackerOptions? options = null, Sholawat? knownText = null)
+public sealed class AsrTracker(AsrTrackerOptions? options = null, IReadOnlyList<Sholawat>? knownTexts = null)
 {
-    private readonly AsrTrackerOptions _options = options ?? (knownText is null ? new AsrTrackerOptions() : AsrTrackerOptions.KnownText);
-    private readonly Sholawat? _known = knownText;
-    private Sholawat? _current = knownText;
+    private readonly AsrTrackerOptions _options =
+        options ?? (knownTexts is { Count: > 0 } ? AsrTrackerOptions.KnownText : new AsrTrackerOptions());
+    private readonly IReadOnlyList<Sholawat>? _known = knownTexts is { Count: > 0 } ? knownTexts : null;
+    private Sholawat? _current = knownTexts is { Count: 1 } ? knownTexts[0] : null;
     private int _line = -1;
     private Sholawat? _pending;
     private int _pendingCount;
@@ -111,21 +112,45 @@ public sealed class AsrTracker(AsrTrackerOptions? options = null, Sholawat? know
 
     private AsrTrackerState PushKnown(AsrMatch match)
     {
-        if (match.Best is { } best && ReferenceEquals(best.Sholawat, _known)
-            && best.Score >= _options.MinScore && match.Margin >= _options.MinMargin)
+        var best = match.Best;
+        if (best is null || !_known!.Contains(best.Sholawat)
+            || best.Score < _options.MinScore || match.Margin < _options.MinMargin)
         {
-            _line = best.CurrentLine;
-            _uncertainCount = 0;
-            return new AsrTrackerState(AsrTrackerStatus.Tracking, _known, _line);
+            if (++_uncertainCount >= _options.HideAfter)
+                _line = -1;
+            return KnownState(_line < 0 ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Holding);
         }
-        if (++_uncertainCount >= _options.HideAfter)
-            _line = -1;
-        return new AsrTrackerState(_line < 0 ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Holding, _known, _line);
+
+        _uncertainCount = 0;
+        // Medley: pindah teks butuh potongan yakin berturut-turut seperti di korpus terbuka; posisi awal
+        // (belum ada teks/baris) langsung diterima karena kandidat sudah terbatas pada teks yang diketahui
+        if (ReferenceEquals(best.Sholawat, _current) || _current is null || _line < 0)
+        {
+            _current = best.Sholawat;
+            _line = best.CurrentLine;
+            _pending = null;
+            _pendingCount = 0;
+            return KnownState(AsrTrackerStatus.Tracking);
+        }
+
+        _pendingCount = ReferenceEquals(_pending, best.Sholawat) ? _pendingCount + 1 : 1;
+        _pending = best.Sholawat;
+        if (_pendingCount >= _options.SwitchAfter)
+        {
+            _current = best.Sholawat;
+            _line = best.CurrentLine;
+            _pending = null;
+            _pendingCount = 0;
+            return KnownState(AsrTrackerStatus.Tracking);
+        }
+        return KnownState(AsrTrackerStatus.Holding);
     }
+
+    private AsrTrackerState KnownState(AsrTrackerStatus status) => new(status, _current, _line);
 
     public void Reset()
     {
-        _current = _known;
+        _current = _known is { Count: 1 } ? _known[0] : null;
         _line = -1;
         _pending = null;
         _pendingCount = 0;

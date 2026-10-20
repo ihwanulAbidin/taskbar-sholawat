@@ -49,6 +49,45 @@ public sealed record AsrMatcherOptions
     public int MinQueryChars { get; init; } = 8;
 }
 
+/// <summary>Lolos bila skor kandidat teratas ≥ <see cref="MinScore"/> dan selisih ≥ <see cref="MinMargin"/>.</summary>
+public sealed record AsrGate(double MinScore, double MinMargin)
+{
+    public bool Passes(AsrMatch match) =>
+        match.Best is { } best && best.Score >= MinScore && match.Margin >= MinMargin;
+}
+
+/// <summary>Gerbang per tahap <see cref="AsrMatcher.Recognize"/>. Suluk ketat: dilantunkan bebas, dan potongan
+/// lagu utama tidak boleh terbaca sebagai suluk.</summary>
+public sealed record AsrCascadeOptions
+{
+    public AsrGate Known { get; init; } = new(AsrTrackerOptions.KnownText.MinScore, AsrTrackerOptions.KnownText.MinMargin);
+    public AsrGate Suluk { get; init; } = new(75, 8);
+    public AsrGate Corpus { get; init; } = new(new AsrTrackerOptions().MinScore, new AsrTrackerOptions().MinMargin);
+
+    /// <summary>Teks-diketahui kalah bila sholawat lain di pustaka mendapat skor mentah setinggi ini di atasnya.</summary>
+    public double KnownOverride { get; init; } = 5;
+}
+
+public enum AsrSource
+{
+    /// <summary>Tidak ada tahap yang yakin.</summary>
+    None,
+
+    /// <summary>Lirik lagu yang diketahui dari judul/description/web.</summary>
+    KnownText,
+
+    Suluk,
+
+    /// <summary>Korpus lagu (judul tidak membantu).</summary>
+    Corpus,
+}
+
+/// <summary>Jenis tampilan: <see cref="AsrSource.Suluk"/> = suluk, selainnya lagu.</summary>
+public sealed record AsrRecognition(AsrSource Source, AsrMatch Match)
+{
+    public AsrCandidate? Best => Source == AsrSource.None ? null : Match.Best;
+}
+
 /// <summary>
 /// L3 (PLAN 3.2 AsrMatcher): transkripsi Whisper satu potongan → kandidat (sholawat, baris, skor) dengan
 /// fuzzy partial-ratio ke jendela 1–<see cref="AsrMatcherOptions.MaxWindowLines"/> baris berurutan.
@@ -64,7 +103,8 @@ public sealed partial class AsrMatcher
         _corpus = sholawat.Select(s => (s, s.Lines.Select(l => Fold(l.Ar)).ToArray())).ToList();
     }
 
-    public AsrMatch Match(string transcript, AsrHint? hint = null)
+    /// <summary>Korpus terbuka: semua sholawat, atau hanya satu jenis (<paramref name="kind"/>).</summary>
+    public AsrMatch Match(string transcript, AsrHint? hint = null, SholawatKind? kind = null)
     {
         var query = Fold(transcript);
         if (query.Replace(" ", "").Length < _options.MinQueryChars)
@@ -73,18 +113,15 @@ public sealed partial class AsrMatcher
         var candidates = new List<AsrCandidate>(_corpus.Count);
         foreach (var (sholawat, lines) in _corpus)
         {
+            if (kind is { } k && sholawat.Kind != k)
+                continue;
             var best = BestWindow(query, lines);
             if (best.Score <= 0)
                 continue;
 
             var current = CurrentLine(query, lines, best.Start, best.Count);
-            var bonus = 0.0;
-            if (hint is { } h && ReferenceEquals(h.Sholawat, sholawat))
-            {
-                var next = current - h.Line;
-                bonus = next is >= 0 and <= 2 ? _options.ContinuityBonus : _options.SameSholawatBonus;
-            }
-            candidates.Add(new AsrCandidate(sholawat, best.Start, best.Count, current, best.Score, best.Score + bonus));
+            var c = new AsrCandidate(sholawat, best.Start, best.Count, current, best.Score, best.Score);
+            candidates.Add(c with { Score = best.Score + Bonus(c, hint) });
         }
 
         candidates.Sort((a, b) => b.Score.CompareTo(a.Score));
@@ -92,40 +129,83 @@ public sealed partial class AsrMatcher
     }
 
     /// <summary>
-    /// Mode teks-diketahui (alur user langkah 5): sholawat sudah diketahui dari judul/description/web, jadi
-    /// potongan hanya diselaraskan ke baris di dalam <paramref name="known"/>. Kandidat = baris berbeda
-    /// (terbaik per <see cref="AsrCandidate.CurrentLine"/>); <see cref="AsrMatch.Margin"/> diukur ke kandidat
-    /// yang barisnya berjarak &gt; 1, karena potongan di perbatasan dua baris wajar mendapat skor mirip.
+    /// Mode teks-diketahui (alur user langkah 5): sholawat sudah diketahui dari judul/description/web — satu
+    /// teks, atau 2–3 teks untuk judul medley — jadi potongan hanya diselaraskan ke baris di dalam
+    /// <paramref name="known"/>. Kandidat = (teks, baris) berbeda; <see cref="AsrMatch.Margin"/> diukur ke
+    /// kandidat yang bukan baris bersebelahan di teks yang sama, karena potongan di perbatasan dua baris wajar
+    /// mendapat skor mirip.
     /// </summary>
-    public AsrMatch Align(string transcript, Sholawat known, AsrHint? hint = null)
+    public AsrMatch Align(string transcript, IReadOnlyList<Sholawat> known, AsrHint? hint = null)
     {
         var query = Fold(transcript);
-        if (query.Replace(" ", "").Length < _options.MinQueryChars)
+        if (query.Replace(" ", "").Length < _options.MinQueryChars || known.Count == 0)
             return new AsrMatch(query, []);
 
-        var lines = known.Lines.Select(l => Fold(l.Ar)).ToArray();
-        var byLine = new Dictionary<int, AsrCandidate>();
-        foreach (var w in Windows(query, lines))
+        var byLine = new Dictionary<(Sholawat, int), AsrCandidate>();
+        foreach (var text in known)
         {
-            if (w.Score <= 0)
-                continue;
-            var current = CurrentLine(query, lines, w.Start, w.Count);
-            var bonus = 0.0;
-            if (hint is { } h && ReferenceEquals(h.Sholawat, known) && h.Line >= 0)
-                bonus = current - h.Line is >= 0 and <= 2 ? _options.ContinuityBonus : 0;
-            var c = new AsrCandidate(known, w.Start, w.Count, current, w.Score, w.Score + bonus);
-            if (!byLine.TryGetValue(current, out var old) || c.Score > old.Score)
-                byLine[current] = c;
+            var lines = text.Lines.Select(l => Fold(l.Ar)).ToArray();
+            foreach (var w in Windows(query, lines))
+            {
+                if (w.Score <= 0)
+                    continue;
+                var current = CurrentLine(query, lines, w.Start, w.Count);
+                var c = new AsrCandidate(text, w.Start, w.Count, current, w.Score, w.Score);
+                c = c with { Score = w.Score + Bonus(c, hint) };
+                if (!byLine.TryGetValue((text, current), out var old) || c.Score > old.Score)
+                    byLine[(text, current)] = c;
+            }
         }
 
         var sorted = byLine.Values.OrderByDescending(c => c.Score).ToList();
         if (sorted.Count == 0)
             return new AsrMatch(query, []);
-        // Kandidat ke-2 = baris terbaik yang tidak bersebelahan dengan baris teratas
         var top = sorted[0];
-        var rival = sorted.Skip(1).FirstOrDefault(c => Math.Abs(c.CurrentLine - top.CurrentLine) > 1);
+        var rival = sorted.Skip(1).FirstOrDefault(c =>
+            !ReferenceEquals(c.Sholawat, top.Sholawat) || Math.Abs(c.CurrentLine - top.CurrentLine) > 1);
         var rest = sorted.Skip(1).Where(c => c != rival);
         return new AsrMatch(query, rival is null ? [top, .. rest] : [top, rival, .. rest]);
+    }
+
+    public AsrMatch Align(string transcript, Sholawat known, AsrHint? hint = null) =>
+        Align(transcript, [known], hint);
+
+    /// <summary>
+    /// Urutan pencocokan (alur user): (a) teks yang diketahui dari judul/description/web → (b) kumpulan suluk,
+    /// gerbang ketat → (c) korpus lagu. Hasil pertama yang lolos gerbangnya dipakai; tidak ada → <see
+    /// cref="AsrSource.None"/> dengan hasil tahap terakhir (untuk log). Gerbang (a) longgar, jadi (a) ditolak bila
+    /// sholawat lain di pustaka jelas lebih cocok — judul bisa salah dikenali (uji nyata 2026-10-21: teks salah
+    /// "Ala Ya Allah" menerima refrain Burdah dengan gerbang longgar).
+    /// </summary>
+    public AsrRecognition Recognize(
+        string transcript, IReadOnlyList<Sholawat>? known = null, AsrHint? hint = null, AsrCascadeOptions? gates = null)
+    {
+        gates ??= new AsrCascadeOptions();
+        var suluk = Match(transcript, hint, SholawatKind.Suluk);
+        var corpus = Match(transcript, hint, SholawatKind.Song);
+
+        if (known is { Count: > 0 })
+        {
+            var aligned = Align(transcript, known, hint);
+            var rival = suluk.Candidates.Concat(corpus.Candidates)
+                .Where(c => !known.Contains(c.Sholawat))
+                .Select(c => c.RawScore)
+                .DefaultIfEmpty(0)
+                .Max();
+            if (gates.Known.Passes(aligned) && rival < aligned.Best!.RawScore + gates.KnownOverride)
+                return new AsrRecognition(AsrSource.KnownText, aligned);
+        }
+
+        if (gates.Suluk.Passes(suluk))
+            return new AsrRecognition(AsrSource.Suluk, suluk);
+        return new AsrRecognition(gates.Corpus.Passes(corpus) ? AsrSource.Corpus : AsrSource.None, corpus);
+    }
+
+    private double Bonus(AsrCandidate c, AsrHint? hint)
+    {
+        if (hint is not { } h || !ReferenceEquals(h.Sholawat, c.Sholawat))
+            return 0;
+        return h.Line >= 0 && c.CurrentLine - h.Line is >= 0 and <= 2 ? _options.ContinuityBonus : _options.SameSholawatBonus;
     }
 
     /// <summary>

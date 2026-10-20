@@ -7,8 +7,17 @@ namespace TaskbarSholawat;
 
 public sealed record SholawatLine(string Ar, string? Latin, string? Translation);
 
+/// <summary>Lagu = lirik utama; suluk = bait lantunan bebas pembuka/sela (sering di luar lirik lagu).</summary>
+public enum SholawatKind
+{
+    Song,
+    Suluk,
+}
+
+/// <summary><see cref="Kind"/> dari field <c>"kind": "suluk"</c>; tanpa field = lagu.</summary>
 public sealed record Sholawat(
-    string Id, IReadOnlyList<string> Titles, string? Source, string? License, IReadOnlyList<SholawatLine> Lines);
+    string Id, IReadOnlyList<string> Titles, string? Source, string? License, IReadOnlyList<SholawatLine> Lines,
+    SholawatKind Kind = SholawatKind.Song);
 
 /// <summary>
 /// Satu bagian medley. Waktu <see cref="Timing"/> relatif terhadap <see cref="Start"/> — LRC dibuat
@@ -200,7 +209,13 @@ public sealed class LyricLibrary
 
         var id = string.IsNullOrWhiteSpace(dto.Id) ? Path.GetFileNameWithoutExtension(path) : dto.Id.Trim();
         var titles = (dto.Titles ?? []).Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!.Trim()).ToList();
-        return new Sholawat(id, titles, dto.Source, dto.License, lines);
+        var kind = dto.Kind?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "lagu" or "song" => SholawatKind.Song,
+            "suluk" => SholawatKind.Suluk,
+            _ => throw new FormatException($"kind \"{dto.Kind}\" tidak dikenal (lagu | suluk)"),
+        };
+        return new Sholawat(id, titles, dto.Source, dto.License, lines, kind);
     }
 
     private static Recording ReadRecording(string path, Dictionary<string, Sholawat> sholawat, List<string> errors)
@@ -274,6 +289,7 @@ public sealed class LyricLibrary
     {
         public string? Id { get; set; }
         public List<string?>? Titles { get; set; }
+        public string? Kind { get; set; }
         public string? Source { get; set; }
         public string? License { get; set; }
         public List<LineDto?>? Lines { get; set; }
