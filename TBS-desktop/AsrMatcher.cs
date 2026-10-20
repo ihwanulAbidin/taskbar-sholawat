@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Raffinert.FuzzySharp;
 
 namespace TaskbarSholawat;
@@ -15,9 +16,11 @@ public sealed record AsrCandidate(
     Sholawat Sholawat, int StartLine, int LineCount, int CurrentLine, double RawScore, double Score);
 
 /// <summary>
-/// Kandidat terbaik per sholawat, urut skor menurun. <see cref="Margin"/> = selisih skor kandidat teratas
-/// ke kandidat teratas dari sholawat LAIN — kecil bila potongan cocok dengan bait yang dipakai beberapa
-/// sholawat (mis. Khoirol Bariyyah di dalam Allahu Allah Lamma Nadani).
+/// <see cref="AsrMatcher.Match"/>: kandidat terbaik per sholawat; <see cref="AsrMatcher.Align"/>: kandidat per
+/// baris di satu sholawat (lihat di sana). Urut skor menurun, kecuali Align menaruh pesaing tak-bersebelahan
+/// di urutan ke-2. <see cref="Margin"/> = selisih kandidat teratas ke kandidat ke-2: pada Match, sholawat LAIN —
+/// kecil bila potongan cocok dengan bait yang dipakai beberapa sholawat (mis. Khoirol Bariyyah di dalam
+/// Allahu Allah Lamma Nadani).
 /// </summary>
 public sealed record AsrMatch(string Query, IReadOnlyList<AsrCandidate> Candidates)
 {
@@ -44,29 +47,21 @@ public sealed record AsrMatcherOptions
 
     /// <summary>Transkripsi sependek ini (setelah dilipat) tidak dicocokkan — terlalu umum (mis. "الله").</summary>
     public int MinQueryChars { get; init; } = 8;
-
-    internal AsrScoreMode ScoreMode { get; init; } = AsrScoreMode.Words;
 }
-
-internal enum AsrScoreMode { Words, Skeleton, Max, Mean }
 
 /// <summary>
 /// L3 (PLAN 3.2 AsrMatcher): transkripsi Whisper satu potongan → kandidat (sholawat, baris, skor) dengan
 /// fuzzy partial-ratio ke jendela 1–<see cref="AsrMatcherOptions.MaxWindowLines"/> baris berurutan.
 /// </summary>
-public sealed class AsrMatcher
+public sealed partial class AsrMatcher
 {
     private readonly AsrMatcherOptions _options;
-    private readonly List<(Sholawat Sholawat, string[] Lines, string[] Skeletons)> _corpus;
+    private readonly List<(Sholawat Sholawat, string[] Lines)> _corpus;
 
     public AsrMatcher(IEnumerable<Sholawat> sholawat, AsrMatcherOptions? options = null)
     {
         _options = options ?? new AsrMatcherOptions();
-        _corpus = sholawat.Select(s =>
-        {
-            var lines = s.Lines.Select(l => Fold(l.Ar)).ToArray();
-            return (s, lines, lines.Select(Skeleton).ToArray());
-        }).ToList();
+        _corpus = sholawat.Select(s => (s, s.Lines.Select(l => Fold(l.Ar)).ToArray())).ToList();
     }
 
     public AsrMatch Match(string transcript, AsrHint? hint = null)
@@ -76,10 +71,9 @@ public sealed class AsrMatcher
             return new AsrMatch(query, []);
 
         var candidates = new List<AsrCandidate>(_corpus.Count);
-        var skeleton = Skeleton(query);
-        foreach (var (sholawat, lines, skeletons) in _corpus)
+        foreach (var (sholawat, lines) in _corpus)
         {
-            var best = BestWindow(query, skeleton, lines, skeletons);
+            var best = BestWindow(query, lines);
             if (best.Score <= 0)
                 continue;
 
@@ -98,9 +92,46 @@ public sealed class AsrMatcher
     }
 
     /// <summary>
+    /// Mode teks-diketahui (alur user langkah 5): sholawat sudah diketahui dari judul/description/web, jadi
+    /// potongan hanya diselaraskan ke baris di dalam <paramref name="known"/>. Kandidat = baris berbeda
+    /// (terbaik per <see cref="AsrCandidate.CurrentLine"/>); <see cref="AsrMatch.Margin"/> diukur ke kandidat
+    /// yang barisnya berjarak &gt; 1, karena potongan di perbatasan dua baris wajar mendapat skor mirip.
+    /// </summary>
+    public AsrMatch Align(string transcript, Sholawat known, AsrHint? hint = null)
+    {
+        var query = Fold(transcript);
+        if (query.Replace(" ", "").Length < _options.MinQueryChars)
+            return new AsrMatch(query, []);
+
+        var lines = known.Lines.Select(l => Fold(l.Ar)).ToArray();
+        var byLine = new Dictionary<int, AsrCandidate>();
+        foreach (var w in Windows(query, lines))
+        {
+            if (w.Score <= 0)
+                continue;
+            var current = CurrentLine(query, lines, w.Start, w.Count);
+            var bonus = 0.0;
+            if (hint is { } h && ReferenceEquals(h.Sholawat, known) && h.Line >= 0)
+                bonus = current - h.Line is >= 0 and <= 2 ? _options.ContinuityBonus : 0;
+            var c = new AsrCandidate(known, w.Start, w.Count, current, w.Score, w.Score + bonus);
+            if (!byLine.TryGetValue(current, out var old) || c.Score > old.Score)
+                byLine[current] = c;
+        }
+
+        var sorted = byLine.Values.OrderByDescending(c => c.Score).ToList();
+        if (sorted.Count == 0)
+            return new AsrMatch(query, []);
+        // Kandidat ke-2 = baris terbaik yang tidak bersebelahan dengan baris teratas
+        var top = sorted[0];
+        var rival = sorted.Skip(1).FirstOrDefault(c => Math.Abs(c.CurrentLine - top.CurrentLine) > 1);
+        var rest = sorted.Skip(1).Where(c => c != rival);
+        return new AsrMatch(query, rival is null ? [top, .. rest] : [top, rival, .. rest]);
+    }
+
+    /// <summary>
     /// ArabicNormalizer + lipat huruf yang sering tertukar pada transkripsi nyanyian (ث/ص→س, ذ→ز, ظ→ض, ق→ك,
-    /// hamzah di atas wawu/ya → huruf dasarnya, hamzah lepas dibuang); selain huruf Arab → spasi.
-    /// Hanya untuk pencocokan.
+    /// hamzah di atas wawu/ya → huruf dasarnya, hamzah lepas dibuang); selain huruf Arab → spasi; tahan cengkok
+    /// (huruf diulang ≥ 3 kali, kata diulang berturut). Hanya untuk pencocokan.
     /// </summary>
     public static string Fold(string text)
     {
@@ -127,52 +158,44 @@ public sealed class AsrMatcher
             else if (sb.Length > 0 && sb[^1] != ' ')
                 sb.Append(' ');
         }
-        return sb.ToString().TrimEnd();
+
+        // Cengkok/vokal panjang: huruf sama ≥ 3 kali berturut jadi satu. Dua kali dibiarkan ("لل" di "الله"
+        // sah). Kata yang diulang berturut (lantunan / Whisper berulang) dihitung sekali
+        var words = LetterRun().Replace(sb.ToString(), "$1").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', words.Where((w, i) => i == 0 || w != words[i - 1]));
     }
 
-    private (int Start, int Count, double Score) BestWindow(string query, string skeleton, string[] lines, string[] skeletons)
+    [GeneratedRegex(@"(\p{L})\1{2,}")]
+    private static partial Regex LetterRun();
+
+    private (int Start, int Count, double Score) BestWindow(string query, string[] lines)
     {
         var best = (Start: 0, Count: 0, Score: 0.0);
+        foreach (var w in Windows(query, lines))
+        {
+            // Seri: jendela lebih pendek (sudah tercatat lebih dulu) dipertahankan
+            if (w.Score > best.Score)
+                best = w;
+        }
+        return best;
+    }
+
+    // Skor kerangka konsonan (tanpa spasi & vokal panjang) sempat diuji 2026-10-21: skor naik, tapi positif
+    // palsu ikut naik (sintetis sampai 5–6% vs ≤ 1% pada ambang 70; uji nyata Burdah memberi tebakan salah
+    // berstatus yakin) — tidak dipakai
+    private IEnumerable<(int Start, int Count, double Score)> Windows(string query, string[] lines)
+    {
         for (var start = 0; start < lines.Length; start++)
         {
             var window = new StringBuilder();
-            var skWindow = new StringBuilder();
             for (var count = 1; count <= _options.MaxWindowLines && start + count <= lines.Length; count++)
             {
                 if (window.Length > 0)
                     window.Append(' ');
                 window.Append(lines[start + count - 1]);
-                skWindow.Append(skeletons[start + count - 1]);
-                var words = _options.ScoreMode == AsrScoreMode.Skeleton ? 0 : WindowScore(query, window.ToString());
-                var sk = _options.ScoreMode == AsrScoreMode.Words ? 0 : WindowScore(skeleton, skWindow.ToString());
-                var score = _options.ScoreMode switch
-                {
-                    AsrScoreMode.Words => words,
-                    AsrScoreMode.Skeleton => sk,
-                    AsrScoreMode.Max => Math.Max(words, sk),
-                    _ => (words + sk) / 2,
-                };
-                // Seri: jendela lebih pendek (sudah tercatat lebih dulu) dipertahankan
-                if (score > best.Score)
-                    best = (start, count, score);
+                yield return (start, count, WindowScore(query, window.ToString()));
             }
         }
-        return best;
-    }
-
-    /// <summary>Kerangka konsonan: tanpa spasi & huruf vokal panjang (ا و ي), huruf berulang diringkas —
-    /// Whisper memotong kata di tempat lain dan memanjangkan/menghilangkan vokal pada nyanyian.</summary>
-    internal static string Skeleton(string folded)
-    {
-        var sb = new StringBuilder(folded.Length);
-        foreach (var c in folded)
-        {
-            if (c is ' ' or 'ا' or 'و' or 'ي')
-                continue;
-            if (sb.Length == 0 || sb[^1] != c)
-                sb.Append(c);
-        }
-        return sb.ToString();
     }
 
     // PartialRatio mencari bagian terbaik dari string yang lebih panjang. Jendela yang lebih pendek dari

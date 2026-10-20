@@ -17,6 +17,10 @@ public sealed record AsrTrackerOptions
 
     /// <summary>Sembunyikan setelah sekian potongan tidak yakin berturut-turut.</summary>
     public int HideAfter { get; init; } = 3;
+
+    /// <summary>Ambang untuk mode teks-diketahui — kandidat hanya baris satu teks, jadi boleh lebih rendah.
+    /// <see cref="MinMargin"/> dipakai sebagai selisih ke baris yang tidak bersebelahan.</summary>
+    public static AsrTrackerOptions KnownText { get; } = new() { MinScore = 55, MinMargin = 3 };
 }
 
 public enum AsrTrackerStatus
@@ -36,26 +40,32 @@ public readonly record struct AsrTrackerState(AsrTrackerStatus Status, Sholawat?
 /// <summary>
 /// Histeresis hasil <see cref="AsrMatcher"/> per potongan (disiapkan untuk SyncEngine M8): tampilan tidak
 /// berpindah sholawat karena satu potongan yang mirip sholawat lain, dan disembunyikan saat beberapa
-/// potongan berturut-turut tidak yakin.
+/// potongan berturut-turut tidak yakin. Dengan <paramref name="knownText"/> (hasil
+/// <see cref="AsrMatcher.Align"/>), sholawat tetap dan yang dilacak hanya baris; Hidden = baris tidak diketahui
+/// (tampilkan judul saja).
 /// </summary>
-public sealed class AsrTracker(AsrTrackerOptions? options = null)
+public sealed class AsrTracker(AsrTrackerOptions? options = null, Sholawat? knownText = null)
 {
-    private readonly AsrTrackerOptions _options = options ?? new AsrTrackerOptions();
-    private Sholawat? _current;
+    private readonly AsrTrackerOptions _options = options ?? (knownText is null ? new AsrTrackerOptions() : AsrTrackerOptions.KnownText);
+    private readonly Sholawat? _known = knownText;
+    private Sholawat? _current = knownText;
     private int _line = -1;
     private Sholawat? _pending;
     private int _pendingCount;
     private int _uncertainCount;
 
-    /// <summary>Diteruskan ke <see cref="AsrMatcher.Match"/> potongan berikutnya.</summary>
+    /// <summary>Diteruskan ke <see cref="AsrMatcher.Match"/> / <see cref="AsrMatcher.Align"/> potongan berikutnya.</summary>
     public AsrHint? Hint => _current is null ? null : new AsrHint(_current, _line);
 
     public AsrTrackerState State =>
-        new(_current is null ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Tracking, _current, _line);
+        new(_current is null || _line < 0 ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Tracking, _current, _line);
 
     public AsrTrackerState Push(AsrMatch match)
     {
         var best = match.Best;
+        if (_known is not null)
+            return PushKnown(match);
+
         var supportsCurrent = best is not null && _current is not null
             && ReferenceEquals(best.Sholawat, _current) && best.Score >= _options.MinScore;
         var confident = best is not null && best.Score >= _options.MinScore && match.Margin >= _options.MinMargin;
@@ -71,12 +81,10 @@ public sealed class AsrTracker(AsrTrackerOptions? options = null)
             return new AsrTrackerState(AsrTrackerStatus.Tracking, _current, _line);
         }
 
+        // Potongan tidak yakin tidak mereset kandidat yang ditunggu: transkripsi nyanyian sering selang-seling
+        // yakin/tidak yakin (uji nyata Burdah 2026-10-21), yang menentukan adalah potongan yakin yang konsisten
         if (!confident)
-        {
-            _pending = null;
-            _pendingCount = 0;
             return Uncertain();
-        }
 
         _uncertainCount = 0;
         if (ReferenceEquals(_pending, best!.Sholawat))
@@ -101,9 +109,23 @@ public sealed class AsrTracker(AsrTrackerOptions? options = null)
         return new AsrTrackerState(_current is null ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Holding, _current, _line);
     }
 
+    private AsrTrackerState PushKnown(AsrMatch match)
+    {
+        if (match.Best is { } best && ReferenceEquals(best.Sholawat, _known)
+            && best.Score >= _options.MinScore && match.Margin >= _options.MinMargin)
+        {
+            _line = best.CurrentLine;
+            _uncertainCount = 0;
+            return new AsrTrackerState(AsrTrackerStatus.Tracking, _known, _line);
+        }
+        if (++_uncertainCount >= _options.HideAfter)
+            _line = -1;
+        return new AsrTrackerState(_line < 0 ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Holding, _known, _line);
+    }
+
     public void Reset()
     {
-        _current = null;
+        _current = _known;
         _line = -1;
         _pending = null;
         _pendingCount = 0;
