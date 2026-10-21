@@ -132,7 +132,8 @@ public static class RecognizeProbe
                 worker.Transcribed += r =>
                 {
                     var rec = matcher.Recognize(r.Text, known, tracker.Hint);
-                    var state = tracker.Push(rec.Match);
+                    // Tidak ada tahap yang lolos → potongan tidak yakin (bukan kandidat korpus mentah)
+                    var state = tracker.Push(rec.Source == AsrSource.None ? new AsrMatch(rec.Match.Query, []) : rec.Match);
                     self.Refresh();
                     var now = self.TotalProcessorTime;
                     var cpu = (now - cpuLast).TotalMilliseconds / wallLast.Elapsed.TotalMilliseconds * 100;

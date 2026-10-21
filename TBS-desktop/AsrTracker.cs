@@ -21,6 +21,14 @@ public sealed record AsrTrackerOptions
     /// <summary>Ambang untuk mode teks-diketahui — kandidat hanya baris satu teks, jadi boleh lebih rendah.
     /// <see cref="MinMargin"/> dipakai sebagai selisih ke baris yang tidak bersebelahan.</summary>
     public static AsrTrackerOptions KnownText { get; } = new() { MinScore = 55, MinMargin = 3 };
+
+    /// <summary>Mode teks-diketahui, dari keadaan tersembunyi: tampil langsung hanya bila skor setinggi ini;
+    /// di bawahnya butuh <see cref="KnownAcquireAfter"/> potongan yakin berturut-turut yang sepakat (teks sama,
+    /// baris ±1). Uji nyata 2026-10-21: satu potongan suluk «يا رب … تفع علي» (69) atau qasidah lain yang
+    /// terdengar kacau (57–69) langsung menampilkan lirik salah lalu ditahan beberapa potongan.</summary>
+    public double KnownAcquireScore { get; init; } = 80;
+
+    public int KnownAcquireAfter { get; init; } = 2;
 }
 
 public enum AsrTrackerStatus
@@ -54,6 +62,8 @@ public sealed class AsrTracker(AsrTrackerOptions? options = null, IReadOnlyList<
     private Sholawat? _pending;
     private int _pendingCount;
     private int _uncertainCount;
+    private AsrCandidate? _acquire;
+    private int _acquireCount;
 
     /// <summary>Diteruskan ke <see cref="AsrMatcher.Match"/> / <see cref="AsrMatcher.Align"/> potongan berikutnya.</summary>
     public AsrHint? Hint => _current is null ? null : new AsrHint(_current, _line);
@@ -116,12 +126,25 @@ public sealed class AsrTracker(AsrTrackerOptions? options = null, IReadOnlyList<
         if (best is null || !_known!.Contains(best.Sholawat)
             || best.Score < _options.MinScore || match.Margin < _options.MinMargin)
         {
+            _acquire = null;
+            _acquireCount = 0;
             if (++_uncertainCount >= _options.HideAfter)
                 _line = -1;
             return KnownState(_line < 0 ? AsrTrackerStatus.Hidden : AsrTrackerStatus.Holding);
         }
 
         _uncertainCount = 0;
+        if (_line < 0 && best.Score < _options.KnownAcquireScore)
+        {
+            var agrees = _acquire is { } a && ReferenceEquals(a.Sholawat, best.Sholawat)
+                         && Math.Abs(a.CurrentLine - best.CurrentLine) <= 1;
+            _acquireCount = agrees ? _acquireCount + 1 : 1;
+            _acquire = best;
+            if (_acquireCount < _options.KnownAcquireAfter)
+                return KnownState(AsrTrackerStatus.Hidden);
+        }
+        _acquire = null;
+        _acquireCount = 0;
         // Medley: pindah teks butuh potongan yakin berturut-turut seperti di korpus terbuka; posisi awal
         // (belum ada teks/baris) langsung diterima karena kandidat sudah terbatas pada teks yang diketahui
         if (ReferenceEquals(best.Sholawat, _current) || _current is null || _line < 0)
@@ -155,6 +178,8 @@ public sealed class AsrTracker(AsrTrackerOptions? options = null, IReadOnlyList<
         _pending = null;
         _pendingCount = 0;
         _uncertainCount = 0;
+        _acquire = null;
+        _acquireCount = 0;
     }
 
     private AsrTrackerState Uncertain()
