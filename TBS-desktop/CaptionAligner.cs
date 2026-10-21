@@ -485,7 +485,8 @@ public sealed class CaptionAligner(CaptionAlignerOptions? options = null)
     public static string Skeleton(string text)
     {
         // Lam syamsiyah: "الرحمن" dibaca "ar-rahman" — lam dibuang agar cocok dengan transliterasi
-        var lower = SunLam.Replace(text.ToLowerInvariant(), "");
+        // NFKC: bentuk presentasi Arab (ﺫَﺍﻙَ, umum di description YouTube) → huruf biasa
+        var lower = SunLam.Replace(text.Normalize(NormalizationForm.FormKC).ToLowerInvariant(), "");
         var sb = new StringBuilder(lower.Length);
         void Add(char c)
         {
