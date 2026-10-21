@@ -47,6 +47,13 @@ public sealed record AsrMatcherOptions
 
     /// <summary>Transkripsi sependek ini (setelah dilipat) tidak dicocokkan — terlalu umum (mis. "الله").</summary>
     public int MinQueryChars { get; init; } = 8;
+
+    /// <summary>
+    /// <see cref="AsrMatcher.Recognize"/>: huruf minimal setelah kata seruan umum dibuang (<see
+    /// cref="AsrMatcher.Distinctive"/>). Uji nyata 2026-10-21: suluk «يا رب يا رب يا رب» terbaca baris 0 Ala Yallah
+    /// («يا رب يا عالم بحالي») 14/17 jendela, «شيء لله» berulang terbaca Ya Habibana — lebih baik sembunyi.
+    /// </summary>
+    public int MinDistinctChars { get; init; } = 6;
 }
 
 /// <summary>Lolos bila skor kandidat teratas ≥ <see cref="MinScore"/> dan selisih ≥ <see cref="MinMargin"/>.</summary>
@@ -181,6 +188,10 @@ public sealed partial class AsrMatcher
         string transcript, IReadOnlyList<Sholawat>? known = null, AsrHint? hint = null, AsrCascadeOptions? gates = null)
     {
         gates ??= new AsrCascadeOptions();
+        // Hanya seruan umum (يا رب، الله، شيء لله، صلوا على محمد …) → tidak cukup untuk menunjuk baris mana pun
+        if (Distinctive(Fold(transcript)).Replace(" ", "").Length < _options.MinDistinctChars)
+            return new AsrRecognition(AsrSource.None, new AsrMatch(Fold(transcript), []));
+
         var suluk = Match(transcript, hint, SholawatKind.Suluk);
         var corpus = Match(transcript, hint, SholawatKind.Song);
 
@@ -200,6 +211,23 @@ public sealed partial class AsrMatcher
             return new AsrRecognition(AsrSource.Suluk, suluk);
         return new AsrRecognition(gates.Corpus.Passes(corpus) ? AsrSource.Corpus : AsrSource.None, corpus);
     }
+
+    // Kata seruan yang muncul di hampir semua sholawat/suluk (bentuk Fold; awalan و/ف/ب/ل ikut dibuang)
+    private static readonly HashSet<string> CommonWords =
+    [
+        "يا", "اي", "ايا", "رب", "ربي", "ربنا", "الله", "لله", "اللهم", "يالله", "الا", "الى", "على", "علي", "عليه",
+        "عليك", "عليا", "علينا", "محمد", "احمد", "صلي", "صل", "صلوا", "سلم", "سلموا", "صلاه", "صلاته", "شي", "شيء",
+        "حبيبي", "حبيبنا", "رسول", "النبي", "نبي", "نبينا", "طه", "مولاي", "مولانا", "اهلا", "سهلا", "مرحبا", "اه", "ها",
+        "لا", "اله", "هو",
+    ];
+
+    /// <summary>Kata yang tersisa setelah kata seruan umum dibuang (input sudah <see cref="Fold"/>).</summary>
+    public static string Distinctive(string folded) =>
+        string.Join(' ', folded.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => !IsCommon(w)));
+
+    private static bool IsCommon(string word) =>
+        CommonWords.Contains(word)
+        || word.Length > 2 && word[0] is 'و' or 'ف' or 'ب' or 'ل' && CommonWords.Contains(word[1..]);
 
     private double Bonus(AsrCandidate c, AsrHint? hint)
     {

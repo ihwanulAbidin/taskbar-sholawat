@@ -7,8 +7,8 @@ namespace TaskbarSholawat;
 
 /// <summary>
 /// Uji alur pengenalan 1→5 nyata pada media yang sedang diputar:
-/// 1–3 judul/sumber/description (MediaContext) → 4 teks diketahui (pustaka, description, video lirik lain
-/// lewat pencarian "&lt;bagian judul&gt; lirik") → 5 loopback per-proses → Whisper (prompt = teks diketahui
+/// 1–3 judul/sumber/description (MediaContext) → 4 teks diketahui (pustaka, lalu LyricFetcher: description,
+/// YouTube, wikisource) → 5 loopback per-proses → Whisper (prompt = teks diketahui
 /// tanpa harakat) → AsrMatcher.Recognize + AsrTracker per jendela.
 /// Pemakaian: TaskbarSholawat.exe --selftest --recognize [--seconds 180] [--known id1,id2] [--no-prompt]
 ///   [--no-web] [--process auto] + opsi AsrProbe (--hop 5 --window 10 --threads 8 --audio-ctx 512 --temp-inc 0 …)
@@ -61,35 +61,33 @@ public static class RecognizeProbe
                 known.Add(byTitle);
                 Log($"[4] judul cocok pustaka (L1): {byTitle.Id}");
             }
-            if (ctx.Description is { } desc && LyricExtractor.Extract(desc) is { Lines.Count: >= 2 } fromDesc)
+            // Bagian judul yang sudah ada di pustaka (FindSholawat cocok per kata utuh: "ALA YALLAH" ≠ alias
+            // "Ala Ya Allah" → cocokkan per huruf); sisanya dicari LyricFetcher (description → YouTube → wikisource)
+            var missing = new List<string>();
+            foreach (var part in LyricFetcher.TitleParts(ctx.Title))
             {
-                known.Add(fromDesc.ToSholawat($"desc-{ctx.VideoId}", [ctx.Title], "description video", null));
-                Log($"[4] description memuat {fromDesc.Lines.Count} baris Arab");
-            }
-            else
-            {
-                Log($"[4] description tanpa blok lirik Arab");
+                var covered = known.FirstOrDefault(s => s.Titles.Any(t => PartMatches(part, t)))
+                              ?? library.Sholawat.FirstOrDefault(s => s.Kind == SholawatKind.Song && s.Titles.Any(t => PartMatches(part, t)));
+                if (covered is null)
+                {
+                    missing.Add(part);
+                    continue;
+                }
+                if (!known.Contains(covered))
+                    known.Add(covered);
+                Log($"[4] bagian judul \"{part}\" → pustaka: {covered.Id}");
             }
 
-            if (!args.Contains("--no-web"))
+            if (missing.Count > 0 && !args.Contains("--no-web"))
             {
-                foreach (var part in TitleParts(ctx.Title))
+                var fetched = await LyricFetcher.FetchAsync(ctx.Title, ctx.Description, ctx.VideoId, m => Log($"[4]   {m}"));
+                foreach (var f in fetched)
                 {
-                    var covered = known.FirstOrDefault(s => s.Titles.Any(t => PartMatches(part, t)));
-                    if (covered is not null)
-                    {
-                        Log($"[4] bagian judul \"{part}\" → sudah ada: {covered.Id}");
+                    // Bagian yang sudah tertutup pustaka tidak ditambah dua kali
+                    if (known.Any(s => s.Titles.Any(t => PartMatches(f.Title, t))))
                         continue;
-                    }
-                    // FindSholawat cocok per kata utuh: "ALA YALLAH" ≠ alias "Ala Ya Allah" → cocokkan per huruf
-                    if (library.Sholawat.FirstOrDefault(s => s.Kind == SholawatKind.Song && s.Titles.Any(t => PartMatches(part, t))) is { } fromLibrary)
-                    {
-                        known.Add(fromLibrary);
-                        Log($"[4] bagian judul \"{part}\" → pustaka: {fromLibrary.Id}");
-                        continue;
-                    }
-                    if (await FindWebLyricsAsync(part, Log) is { } web)
-                        known.Add(web);
+                    known.Add(f.Lyrics.ToSholawat($"web-{known.Count}", [f.Title, .. f.ArabicTitle is null ? [] : new[] { f.ArabicTitle }], f.Source, null));
+                    Log($"[4] LyricFetcher \"{f.Title}\" → {f.Lyrics.Lines.Count} baris, {f.Source} (dukungan {f.Support}/{f.Candidates})");
                 }
             }
             if (known.Count == 0)
@@ -132,7 +130,8 @@ public static class RecognizeProbe
                 worker.Transcribed += r =>
                 {
                     var rec = matcher.Recognize(r.Text, known, tracker.Hint);
-                    var state = tracker.Push(rec.Match);
+                    // Tidak ada tahap yang lolos → potongan tidak yakin (bukan kandidat korpus mentah)
+                    var state = tracker.Push(rec.Source == AsrSource.None ? new AsrMatch(rec.Match.Query, []) : rec.Match);
                     self.Refresh();
                     var now = self.TotalProcessorTime;
                     var cpu = (now - cpuLast).TotalMilliseconds / wallLast.Elapsed.TotalMilliseconds * 100;
@@ -177,16 +176,6 @@ public static class RecognizeProbe
         }
     }
 
-    /// <summary>"ALA YALLAH &amp; ALA THOHA AL YAMANI - SUKAROL MUNSYID SEGI 8" → ["ALA YALLAH", "ALA THOHA AL YAMANI"]:
-    /// buang bagian setelah " - " terakhir (grup/penyanyi), pecah medley di "&amp;" / "+" / "|".</summary>
-    internal static IReadOnlyList<string> TitleParts(string title)
-    {
-        var main = title.LastIndexOf(" - ", StringComparison.Ordinal) is var dash and > 0 ? title[..dash] : title;
-        return main.Split(['&', '+', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(p => p.Length >= 4)
-            .ToList();
-    }
-
     private static bool PartMatches(string part, string title)
     {
         var a = Letters(part);
@@ -195,30 +184,6 @@ public static class RecognizeProbe
     }
 
     private static string Letters(string s) => LyricLibrary.TitleKey(s).Replace(" ", "");
-
-    /// <summary>Langkah 4: video lirik lain → blok lirik di description. Video dipakai bila judulnya memuat
-    /// kata khas bagian judul (≥ 4 huruf, bukan kata umum) dan description-nya memuat ≥ 4 baris Arab.</summary>
-    private static async Task<Sholawat?> FindWebLyricsAsync(string part, Action<FormattableString> log)
-    {
-        string[] common = ["sholawat", "shalawat", "lirik", "lyrics", "teks", "allah", "yalla", "yallah"];
-        var words = LyricLibrary.TitleKey(part).Split(' ').Where(w => w.Length >= 4 && !common.Contains(w)).ToList();
-        var query = $"{part} lirik";
-        var hits = await MediaDescription.SearchVideosAsync(query);
-        log($"[4] web \"{query}\": {hits.Count} hasil; kata khas: {string.Join(",", words)}");
-        foreach (var hit in hits.Take(8))
-        {
-            var key = LyricLibrary.TitleKey(hit.Title).Replace(" ", "");
-            if (words.Count > 0 && !words.Any(w => key.Contains(w)))
-                continue;
-            var video = await MediaDescription.FetchAsync(hit.VideoId);
-            var lyrics = video is null ? ExtractedLyrics.Empty : LyricExtractor.Extract(video.Description);
-            log($"[4]   {hit.VideoId} \"{hit.Title}\" → {lyrics.Lines.Count} baris Arab");
-            if (lyrics.Lines.Count >= 4)
-                return lyrics.ToSholawat($"web-{hit.VideoId}", [part, hit.Title], $"description https://www.youtube.com/watch?v={hit.VideoId}", null);
-        }
-        log($"[4]   tidak ada video lirik untuk \"{part}\"");
-        return null;
-    }
 
     /// <summary>Teks diketahui tanpa harakat, bergantian per teks agar tiap sholawat medley terwakili.</summary>
     internal static string BuildPrompt(IReadOnlyList<Sholawat> known)
