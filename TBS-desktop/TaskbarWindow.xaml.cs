@@ -1,6 +1,8 @@
 using System.Windows;
+using System.Windows.Interop;
 using Deskband11Lib.Wpf;
 using Microsoft.Win32;
+using static TaskbarSholawat.NativeMethods;
 
 namespace TaskbarSholawat;
 
@@ -29,6 +31,16 @@ public partial class TaskbarWindow : Window
     }
 
     public Task AttachAsync() => Host.AttachWhenLayoutReadyAsync();
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        // Sebelum dijadikan anak taskbar, jendela ini sempat tampil sebagai top-level; shell lalu
+        // mencatatnya sebagai jendela aplikasi (kotak abu-abu di Task View / Alt+Tab) dan tidak
+        // menghapusnya setelah SetParent. Tool window tidak pernah dicatat
+        var hwnd = new WindowInteropHelper(this).Handle;
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, GetWindowLongPtr(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW);
+    }
 
     /// <summary>
     /// Tinggi terkunci taskbar (48 px pada 100%). ≤ 1: kedua baris mengecil. &gt; 1: baris Arab
