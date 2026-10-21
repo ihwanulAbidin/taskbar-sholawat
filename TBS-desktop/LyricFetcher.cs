@@ -150,6 +150,16 @@ public static partial class LyricFetcher
             trace?.Invoke($"[{part}] YouTube \"{part} lirik\": {hits.Count} video");
             await AddVideosAsync(pool, hits, part, null, LatinVideos, anchor: true, seen, trace);
             arabicTitle = HarvestArabicTitle(hits, part, trace);
+            // Video berjudul Arab sering menulis transliterasi Latin juga ("Ya Tarim يا تريم"); kata Arab di kueri
+            // memunculkannya (uji: Ya Robbi Bil Mustofa, Ya Tarim, Sholawat Nariyah). Hanya untuk panen judul
+            foreach (var suffix in new[] { "قصيدة", "كلمات" })
+            {
+                if (arabicTitle is not null)
+                    break;
+                var more = await MediaDescription.SearchVideosAsync($"{part} {suffix}", trace);
+                arabicTitle = HarvestArabicTitle(more, part, trace);
+                trace?.Invoke($"[{part}] YouTube \"{part} {suffix}\": {more.Count} video");
+            }
             trace?.Invoke($"[{part}] judul Arab dari judul hasil: {arabicTitle ?? "(tidak ada)"}");
             arabicTitle ??= SeedTitle(pool, part, trace);
         }
