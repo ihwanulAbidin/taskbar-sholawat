@@ -74,6 +74,9 @@ public sealed class LyricLibrary
 
     public static string DefaultDir => PortablePaths.Library;
 
+    /// <summary>Teks hasil pencarian online (<see cref="LyricFetcher.Save"/>), format sama dengan <c>sholawat/</c>.</summary>
+    public static string CacheDir(string dir) => Path.Combine(dir, "cache");
+
     public IReadOnlyCollection<Sholawat> Sholawat => _sholawat.Values;
 
     public IReadOnlyList<Recording> Recordings { get; }
@@ -89,8 +92,9 @@ public sealed class LyricLibrary
         var sholawatFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var recordings = new List<Recording>();
 
-        // Urutan nama berkas ordinal: bila id kembar, berkas pertama menang
-        foreach (var path in JsonFiles(Path.Combine(dir, "sholawat")))
+        // Urutan nama berkas ordinal: bila id kembar, berkas pertama menang. Cache hasil fetch (LyricFetcher.Save)
+        // sesudah pustaka user, supaya teks milik user menang
+        foreach (var path in JsonFiles(Path.Combine(dir, "sholawat")).Concat(JsonFiles(CacheDir(dir))))
         {
             try
             {

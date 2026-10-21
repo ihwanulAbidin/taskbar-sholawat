@@ -33,8 +33,10 @@ public static partial class LyricExtractor
 
     private const int MinArabicLetters = 6;
 
+    private const int MaxLyricWords = 16;
+
     // Penanda batas keras (judul bagian di HTML) — blok lirik tidak boleh menyeberanginya
-    private const string HardBreak = "\f";
+    internal const string HardBreak = "\f";
 
     private static readonly HashSet<string> s_indonesianWords =
     [
@@ -180,11 +182,22 @@ public static partial class LyricExtractor
         s = Hashtag().Replace(s, " ");
         s = ChapterTime().Replace(s, " ");
         s = NonText().Replace(s, " ");
+        // Sesudah emoji dibuang: "🔸كلمات وألحان | تراث"
+        if (Credit().IsMatch(s))
+            return "";
+        // Tatweel hiasan ("الــــرَّحِـــيمَةْ") & pemisah shadr/'ajuz ("***", "،،،،") → bentuk pustaka " ، "
+        s = s.Replace("ـ", "");
+        s = HemistichSeparator().Replace(s, " ، ");
         // Penomoran bait / poin: "1.", "(2)", "١-", "•"; label "Artinya:", "Latin:" dsb.
         s = Numbering().Replace(s, "");
         s = Label().Replace(s, "");
         s = s.Trim('*', '_', '"', '“', '”', ' ', '-', '–', '•', '|', '(', ')');
-        return Spaces().Replace(s, " ").Trim();
+        s = Spaces().Replace(s, " ").Trim();
+        // Paragraf penjelasan berbahasa Arab (description video Arab) / pengantar "…:" — bukan baris lirik;
+        // bait penuh "shadr ، 'ajuz" paling panjang ±14 kata
+        if (IsArabic(s) && (s.Split(' ').Length > MaxLyricWords || raw.TrimEnd().EndsWith(':')))
+            return "";
+        return s;
     }
 
     [GeneratedRegex(@"https?://|www\.|\.com\b|\.id\b", RegexOptions.IgnoreCase)]
@@ -205,6 +218,14 @@ public static partial class LyricExtractor
 
     [GeneratedRegex(@"^\s*(?:arab\s+latin|tulisan\s+(?:arab|latin)|bacaan\s+latin|latin(?:nya)?|arti(?:nya)?|terjemah(?:an|annya)?|makna(?:nya)?)\s*[:：]\s*", RegexOptions.IgnoreCase)]
     private static partial Regex Label();
+
+    // Kredit description video Arab: "كلمات وألحان | تراث", "أداء : …", "الهندسة الصوتية | …", "ساوند كلاود :" —
+    // label kredit lalu pemisah dalam ≤ 3 kata; juga judul "كلمات أغنية "البردة""
+    [GeneratedRegex(@"^[\s:.\-–|*=~_]*(?:كلمات\s+(?:أغنية|اغنية|قصيدة|نشيد|أنشودة|انشودة)|(?:ال)?(?:كلمات|ألحان|الحان|لحن|تلحين|أداء|اداء|غناء|إنشاد|انشاد|توزيع|هندسة|مونتاج|تصوير|إخراج|اخراج|إنتاج|انتاج|إشراف|اشراف|منشد|ميكس|مكس|جرافيك|ساوند|تابعونا|اشترك|اشتركوا|قناة|للتواصل|حسابات)(?:\s+\S+){0,3}?\s*[:|：\-–])")]
+    private static partial Regex Credit();
+
+    [GeneratedRegex(@"\s*(?:\*{2,}|،{2,})\s*")]
+    private static partial Regex HemistichSeparator();
 
     // Isi tidak boleh menyeberangi paragraf/tebal lain — tanpa itu pola lazy merentang dari baris Arab sebelumnya
     [GeneratedRegex(@"<(p|div)\b[^>]*>\s*<(strong|b)\b[^>]*>((?:(?!</?(?:p|div|strong|b)\b).)*?)</\2>\s*</\1>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
