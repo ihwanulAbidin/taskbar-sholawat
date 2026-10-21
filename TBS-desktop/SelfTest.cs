@@ -19,6 +19,7 @@ namespace TaskbarSholawat;
 /// Alur pengenalan 1–3: --selftest --source → judul, sumber, URL, description (<see cref="SourceProbe"/>).
 /// Langkah 5 (audio→teks): --selftest --asr [--seconds 60] [--model path] [--prompt-file f] … (<see cref="AsrProbe"/>).
 /// Takarir YouTube: --selftest --transcript [--video ID] [--lang ar] [--sync 10] (<see cref="TranscriptProbe"/>).
+/// Langkah 4 (teks dari web): --selftest --lyrics [--title "judul"] [--no-save] (<see cref="LyricProbe"/>).
 /// Hasil ditulis ke selftest.log di samping exe (WinExe tidak punya konsol).
 /// </summary>
 public static class SelfTest
@@ -35,6 +36,8 @@ public static class SelfTest
             return await AsrProbe.RunAsync(args);
         if (args.Contains("--transcript"))
             return await TranscriptProbe.RunAsync(args);
+        if (args.Contains("--lyrics"))
+            return await LyricProbe.RunAsync(args);
 
         var log = new StringBuilder();
         void Log(string msg) => log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {msg}");

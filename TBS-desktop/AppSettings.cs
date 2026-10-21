@@ -36,6 +36,10 @@ public sealed class AppSettings
     public double StripTextScale { get; set; } = 1;
     public double FloatingTextScale { get; set; } = 1;
 
+    /// <summary>Alur pengenalan langkah 4: judul media dikirim ke YouTube/Wikisource untuk mencari teks
+    /// (<see cref="LyricFetcher"/>); hasil hanya di cache lokal. Bisa dimatikan (DECISIONS 2026-10-21).</summary>
+    public bool SearchLyricsOnline { get; set; } = true;
+
     public const double MinTextScale = 0.5;
     public const double MaxTextScale = 3;
 
