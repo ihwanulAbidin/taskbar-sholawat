@@ -339,8 +339,7 @@ public static partial class LyricFetcher
     private static ExtractedLyrics Slice(ExtractedLyrics lyrics, int first, int last)
     {
         var order = lyrics.Order.Where(i => i >= first && i <= last).Select(i => i - first).ToList();
-        var refrain = order.GroupBy(i => i).Where(g => g.Count() > 1).Select(g => g.Key).Order().ToList();
-        return new ExtractedLyrics(lyrics.Lines.Skip(first).Take(last - first + 1).ToList(), order, refrain);
+        return new ExtractedLyrics(lyrics.Lines.Skip(first).Take(last - first + 1).ToList(), order, LyricExtractor.RefrainOf(order));
     }
 
     private static bool Relevant(string videoTitle, string part, string? arabicTitle)
