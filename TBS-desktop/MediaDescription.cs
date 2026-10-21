@@ -6,7 +6,8 @@ namespace TaskbarSholawat;
 
 public sealed record YouTubeVideo(string VideoId, string Title, string Author, int LengthSeconds, string Description);
 
-public sealed record YouTubeHit(string VideoId, string Title, string Owner, int? LengthSeconds);
+/// <param name="LengthSeconds">null untuk siaran langsung / durasi tak terbaca.</param>
+public sealed record YouTubeSearchHit(string VideoId, string Title, string Owner, int? LengthSeconds);
 
 /// <summary>
 /// Alur pengenalan langkah 3: description video YouTube dari HTML publik (tanpa API key) —
@@ -51,12 +52,11 @@ public static class MediaDescription
     /// </summary>
     public static async Task<string?> SearchAsync(string title, string artist, TimeSpan duration, Action<string>? trace = null)
     {
-        var hits = await SearchVideosAsync(title, trace);
         var wanted = MediaSource.Normalize(title);
         var owner = MediaSource.Normalize(artist);
         string? best = null;
         var bestScore = 0;
-        foreach (var v in hits)
+        foreach (var v in await SearchVideosAsync(title, trace))
         {
             var t = MediaSource.Normalize(v.Title);
             var titleOk = t.Length > 0 && (t == wanted || t.Contains(wanted) || wanted.Contains(t));
@@ -73,21 +73,20 @@ public static class MediaDescription
         return best;
     }
 
-    /// <summary>Hasil pencarian YouTube apa adanya (urut tampilan); kosong bila gagal. Untuk langkah 4:
-    /// mencari video lirik lain ("&lt;judul&gt; lirik") yang description-nya memuat teks.</summary>
-    public static async Task<IReadOnlyList<YouTubeHit>> SearchVideosAsync(string query, Action<string>? trace = null)
+    /// <summary>Hasil video halaman pencarian YouTube, urut seperti di halaman (teratas lebih dulu); gagal → kosong.</summary>
+    public static async Task<IReadOnlyList<YouTubeSearchHit>> SearchVideosAsync(string query, Action<string>? trace = null)
     {
         using var doc = await GetEmbeddedJsonAsync(
             $"https://www.youtube.com/results?search_query={Uri.EscapeDataString(query)}", "var ytInitialData = ", trace);
         if (doc is null)
             return [];
-        var hits = new List<YouTubeHit>();
+        var hits = new List<YouTubeSearchHit>();
         foreach (var v in VideoRenderers(doc.RootElement))
         {
             if (Str(v, "videoId") is not { } id)
                 continue;
             var len = v.TryGetProperty("lengthText", out var lt) ? ParseLength(Str(lt, "simpleText")) : null;
-            hits.Add(new YouTubeHit(id, RunsText(v, "title"), RunsText(v, "ownerText"), len));
+            hits.Add(new YouTubeSearchHit(id, RunsText(v, "title"), RunsText(v, "ownerText"), len));
         }
         return hits;
     }
