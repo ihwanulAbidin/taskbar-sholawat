@@ -6,6 +6,8 @@ namespace TaskbarSholawat;
 
 public sealed record YouTubeVideo(string VideoId, string Title, string Author, int LengthSeconds, string Description);
 
+public sealed record YouTubeHit(string VideoId, string Title, string Owner, int? LengthSeconds);
+
 /// <summary>
 /// Alur pengenalan langkah 3: description video YouTube dari HTML publik (tanpa API key) —
 /// ytInitialPlayerResponse di halaman watch, ytInitialData di halaman pencarian. Struktur halaman
@@ -49,34 +51,45 @@ public static class MediaDescription
     /// </summary>
     public static async Task<string?> SearchAsync(string title, string artist, TimeSpan duration, Action<string>? trace = null)
     {
-        using var doc = await GetEmbeddedJsonAsync(
-            $"https://www.youtube.com/results?search_query={Uri.EscapeDataString(title)}", "var ytInitialData = ", trace);
-        if (doc is null)
-            return null;
-
+        var hits = await SearchVideosAsync(title, trace);
         var wanted = MediaSource.Normalize(title);
         var owner = MediaSource.Normalize(artist);
         string? best = null;
         var bestScore = 0;
-        foreach (var v in VideoRenderers(doc.RootElement))
+        foreach (var v in hits)
         {
-            var id = Str(v, "videoId");
-            var vTitle = RunsText(v, "title");
-            var vOwner = RunsText(v, "ownerText");
-            var len = v.TryGetProperty("lengthText", out var lt) ? ParseLength(Str(lt, "simpleText")) : null;
-            var t = MediaSource.Normalize(vTitle);
+            var t = MediaSource.Normalize(v.Title);
             var titleOk = t.Length > 0 && (t == wanted || t.Contains(wanted) || wanted.Contains(t));
-            var lenOk = duration <= TimeSpan.Zero || (len is { } l && Math.Abs(l - duration.TotalSeconds) <= 5);
-            var score = !titleOk || !lenOk || id is null ? 0 : (MediaSource.Normalize(vOwner) == owner ? 2 : 1);
-            trace?.Invoke($"  kandidat {id} \"{vTitle}\" {len?.ToString() ?? "?"} s, {vOwner} → skor {score}");
+            var lenOk = duration <= TimeSpan.Zero || (v.LengthSeconds is { } l && Math.Abs(l - duration.TotalSeconds) <= 5);
+            var score = !titleOk || !lenOk ? 0 : (MediaSource.Normalize(v.Owner) == owner ? 2 : 1);
+            trace?.Invoke($"  kandidat {v.VideoId} \"{v.Title}\" {v.LengthSeconds?.ToString() ?? "?"} s, {v.Owner} → skor {score}");
             if (score > bestScore)
             {
-                (best, bestScore) = (id, score);
+                (best, bestScore) = (v.VideoId, score);
                 if (score == 2)
                     break;
             }
         }
         return best;
+    }
+
+    /// <summary>Hasil pencarian YouTube apa adanya (urut tampilan); kosong bila gagal. Untuk langkah 4:
+    /// mencari video lirik lain ("&lt;judul&gt; lirik") yang description-nya memuat teks.</summary>
+    public static async Task<IReadOnlyList<YouTubeHit>> SearchVideosAsync(string query, Action<string>? trace = null)
+    {
+        using var doc = await GetEmbeddedJsonAsync(
+            $"https://www.youtube.com/results?search_query={Uri.EscapeDataString(query)}", "var ytInitialData = ", trace);
+        if (doc is null)
+            return [];
+        var hits = new List<YouTubeHit>();
+        foreach (var v in VideoRenderers(doc.RootElement))
+        {
+            if (Str(v, "videoId") is not { } id)
+                continue;
+            var len = v.TryGetProperty("lengthText", out var lt) ? ParseLength(Str(lt, "simpleText")) : null;
+            hits.Add(new YouTubeHit(id, RunsText(v, "title"), RunsText(v, "ownerText"), len));
+        }
+        return hits;
     }
 
     private static async Task<JsonDocument?> GetEmbeddedJsonAsync(string url, string marker, Action<string>? trace)

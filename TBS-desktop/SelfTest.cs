@@ -17,6 +17,7 @@ namespace TaskbarSholawat;
 /// M3: --selftest --media [--seconds 60] → probe GSMTC (<see cref="MediaProbe"/>).
 /// M5: --selftest --capture [--process chrome|auto] [--seconds 30] → probe loopback (<see cref="CaptureProbe"/>).
 /// Alur pengenalan 1–3: --selftest --source → judul, sumber, URL, description (<see cref="SourceProbe"/>).
+/// Alur 1→5 nyata: --selftest --recognize [--seconds 180] [--known id] [--no-prompt] … (<see cref="RecognizeProbe"/>).
 /// Langkah 5 (audio→teks): --selftest --asr [--seconds 60] [--model path] [--prompt-file f] … (<see cref="AsrProbe"/>).
 /// Takarir YouTube: --selftest --transcript [--video ID] [--lang ar] [--sync 10] (<see cref="TranscriptProbe"/>).
 /// Takarir → timing baris lirik → .lrc: --selftest --align [--video ID] [--known id] [--no-save] [--sync 20] (<see cref="AlignProbe"/>).
@@ -32,6 +33,8 @@ public static class SelfTest
             return await CaptureProbe.RunAsync(args);
         if (args.Contains("--source"))
             return await SourceProbe.RunAsync(args);
+        if (args.Contains("--recognize"))
+            return await RecognizeProbe.RunAsync(args);
         if (args.Contains("--asr"))
             return await AsrProbe.RunAsync(args);
         if (args.Contains("--align"))
