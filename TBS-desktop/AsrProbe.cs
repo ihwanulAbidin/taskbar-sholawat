@@ -28,23 +28,10 @@ public static class AsrProbe
         try
         {
             var seconds = IntArg(args, "--seconds", 60);
-            var model = SelfTest.ArgValue(args, "--model")
-                ?? (Directory.Exists(PortablePaths.Models)
-                    ? Directory.EnumerateFiles(PortablePaths.Models, "*.bin").OrderBy(f => f).FirstOrDefault()
-                    : null)
-                ?? throw new FileNotFoundException($"Tidak ada model *.bin di {PortablePaths.Models}");
+            var model = ModelFrom(args);
             var promptFile = SelfTest.ArgValue(args, "--prompt-file");
-            var options = new AsrOptions
+            var options = OptionsFrom(args, model) with
             {
-                ModelPath = model,
-                Hop = TimeSpan.FromSeconds(DoubleArg(args, "--hop", 3)),
-                Window = TimeSpan.FromSeconds(DoubleArg(args, "--window", 8)),
-                BeamSize = IntArg(args, "--beam", 0),
-                Threads = IntArg(args, "--threads", 0),
-                AudioContext = IntArg(args, "--audio-ctx", 0),
-                TemperatureInc = SelfTest.ArgValue(args, "--temp-inc") is null ? null : (float)DoubleArg(args, "--temp-inc", 0.2),
-                MaxTokensPerSegment = IntArg(args, "--max-tokens", 0),
-                SilenceRms = DoubleArg(args, "--silence", 0.003),
                 Prompt = promptFile is null ? null : await File.ReadAllTextAsync(promptFile),
             };
 
@@ -195,10 +182,32 @@ public static class AsrProbe
     private static string Sec(int samples) =>
         string.Create(CultureInfo.InvariantCulture, $"{samples / (double)AudioCapture.SampleRate:0.0}");
 
-    private static int IntArg(string[] args, string name, int fallback) =>
+    /// <summary>Opsi AsrWorker dari argumen probe (dipakai juga <see cref="RecognizeProbe"/>); default = AsrOptions.</summary>
+    internal static AsrOptions OptionsFrom(string[] args, string model, double hop = 3, double window = 8) => new()
+    {
+        ModelPath = model,
+        Hop = TimeSpan.FromSeconds(DoubleArg(args, "--hop", hop)),
+        Window = TimeSpan.FromSeconds(DoubleArg(args, "--window", window)),
+        BeamSize = IntArg(args, "--beam", 0),
+        Threads = IntArg(args, "--threads", 0),
+        AudioContext = IntArg(args, "--audio-ctx", 0),
+        TemperatureInc = SelfTest.ArgValue(args, "--temp-inc") is null ? null : (float)DoubleArg(args, "--temp-inc", 0.2),
+        MaxTokensPerSegment = IntArg(args, "--max-tokens", 0),
+        SilenceRms = DoubleArg(args, "--silence", 0.003),
+    };
+
+    /// <summary>--model, atau *.bin pertama di models/.</summary>
+    internal static string ModelFrom(string[] args) =>
+        SelfTest.ArgValue(args, "--model")
+        ?? (Directory.Exists(PortablePaths.Models)
+            ? Directory.EnumerateFiles(PortablePaths.Models, "*.bin").OrderBy(f => f).FirstOrDefault()
+            : null)
+        ?? throw new FileNotFoundException($"Tidak ada model *.bin di {PortablePaths.Models}");
+
+    internal static int IntArg(string[] args, string name, int fallback) =>
         int.TryParse(SelfTest.ArgValue(args, name), CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
-    private static double DoubleArg(string[] args, string name, double fallback) =>
+    internal static double DoubleArg(string[] args, string name, double fallback) =>
         double.TryParse(SelfTest.ArgValue(args, name), NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
     private static string Fmt(TimeSpan t) =>
