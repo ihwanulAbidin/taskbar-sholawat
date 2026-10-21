@@ -22,6 +22,7 @@ namespace TaskbarSholawat;
 /// Takarir YouTube: --selftest --transcript [--video ID] [--lang ar] [--sync 10] (<see cref="TranscriptProbe"/>).
 /// Takarir → timing baris lirik → .lrc: --selftest --align [--video ID] [--known id] [--no-save] [--sync 20] (<see cref="AlignProbe"/>).
 /// Langkah 4 (teks dari web): --selftest --lyrics [--title "judul"] [--no-save] (<see cref="LyricProbe"/>).
+/// Eval berlabel tanpa Whisper/audio: --selftest --eval [--eval-dir dir] [--library dir] [--offline] (<see cref="EvalProbe"/>).
 /// Hasil ditulis ke selftest.log di samping exe (WinExe tidak punya konsol).
 /// </summary>
 public static class SelfTest
@@ -44,6 +45,8 @@ public static class SelfTest
             return await TranscriptProbe.RunAsync(args);
         if (args.Contains("--lyrics"))
             return await LyricProbe.RunAsync(args);
+        if (args.Contains("--eval"))
+            return await EvalProbe.RunAsync(args);
 
         var log = new StringBuilder();
         void Log(string msg) => log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {msg}");
