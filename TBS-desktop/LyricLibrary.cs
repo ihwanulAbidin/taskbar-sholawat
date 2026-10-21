@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Raffinert.FuzzySharp;
 
 namespace TaskbarSholawat;
 
@@ -43,6 +44,10 @@ public readonly record struct LyricPosition(
 /// </summary>
 public sealed class LyricLibrary
 {
+    // Bagian judul ↔ alias, huruf tanpa spasi (nilai RecognizeProbe executor1: "alayallah" ≈ "alayaallahyaalimbihali")
+    private const int PartMatch = 85;
+    private const int MinPartLetters = 4;
+
     // Durasi GSMTC vs durationSec di pustaka (pembulatan / iklan pendek di awal)
     private static readonly TimeSpan DurationTolerance = TimeSpan.FromSeconds(5);
 
@@ -54,12 +59,14 @@ public sealed class LyricLibrary
     };
 
     private readonly Dictionary<string, Sholawat> _sholawat;
+    private readonly HashSet<string> _cacheIds;
     private readonly List<(string Key, Sholawat Sholawat)> _titleIndex;
     private readonly List<(string Key, Recording Recording)> _recordingIndex;
 
-    private LyricLibrary(Dictionary<string, Sholawat> sholawat, List<Recording> recordings, List<string> errors)
+    private LyricLibrary(Dictionary<string, Sholawat> sholawat, HashSet<string> cacheIds, List<Recording> recordings, List<string> errors)
     {
         _sholawat = sholawat;
+        _cacheIds = cacheIds;
         Recordings = recordings;
         Errors = errors;
         _titleIndex = sholawat.Values
@@ -94,15 +101,23 @@ public sealed class LyricLibrary
 
         // Urutan nama berkas ordinal: bila id kembar, berkas pertama menang. Cache hasil fetch (LyricFetcher.Save)
         // sesudah pustaka user, supaya teks milik user menang
-        foreach (var path in JsonFiles(Path.Combine(dir, "sholawat")).Concat(JsonFiles(CacheDir(dir))))
+        var cacheIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cacheFiles = JsonFiles(CacheDir(dir)).ToList();
+        foreach (var path in JsonFiles(Path.Combine(dir, "sholawat")).Concat(cacheFiles))
         {
             try
             {
                 var s = ReadSholawat(path);
                 if (sholawat.TryAdd(s.Id, s))
+                {
                     sholawatFiles[s.Id] = path;
+                    if (cacheFiles.Contains(path))
+                        cacheIds.Add(s.Id);
+                }
                 else
+                {
                     errors.Add($"{path}: id \"{s.Id}\" sudah dipakai {Path.GetFileName(sholawatFiles[s.Id])}, dilewati");
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or FormatException)
             {
@@ -126,7 +141,7 @@ public sealed class LyricLibrary
             }
         }
 
-        return new LyricLibrary(sholawat, recordings, errors);
+        return new LyricLibrary(sholawat, cacheIds, recordings, errors);
     }
 
     /// <summary>
@@ -153,6 +168,35 @@ public sealed class LyricLibrary
             .Where(e => ContainsWords(key, e.Key))
             .OrderByDescending(e => e.Key.Length)
             .Select(e => e.Sholawat)
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Teks diketahui untuk judul media, satu per bagian judul (<see cref="LyricFetcher.TitleParts"/>: medley
+    /// "A - B &amp; C") urut kemunculan; bagian tanpa kecocokan dilewati, sholawat yang sama hanya sekali.
+    /// </summary>
+    public IReadOnlyList<Sholawat> FindSholawats(string mediaTitle) =>
+        LyricFetcher.TitleParts(mediaTitle).Select(FindPart).OfType<Sholawat>().Distinct().ToList();
+
+    /// <summary>
+    /// Satu bagian judul → sholawat: alias yang termuat per kata utuh (terpanjang), atau — untuk lagu — kemiripan
+    /// huruf tanpa spasi (ejaan judul video beda: "ALA YALLAH" ≈ "Ala Ya Allah ya Alim bihali"). Seri → pustaka
+    /// user sebelum cache.
+    /// </summary>
+    internal Sholawat? FindPart(string part)
+    {
+        if (FindSholawat(part) is { } exact)
+            return exact;
+        var letters = TitleKey(part).Replace(" ", "");
+        if (letters.Length < MinPartLetters)
+            return null;
+        return _titleIndex
+            .Where(e => e.Sholawat.Kind == SholawatKind.Song && e.Key.Replace(" ", "").Length >= MinPartLetters)
+            .Select(e => (e.Sholawat, Score: Fuzz.PartialRatio(letters, e.Key.Replace(" ", ""))))
+            .Where(x => x.Score >= PartMatch)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => _cacheIds.Contains(x.Sholawat.Id))
+            .Select(x => x.Sholawat)
             .FirstOrDefault();
     }
 

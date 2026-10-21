@@ -102,13 +102,55 @@ public static partial class LyricFetcher
         return http;
     }
 
+    /// <summary>
+    /// Teks diketahui untuk media yang diputar (alur langkah 4), urut bagian judul medley: pustaka dulu
+    /// (<see cref="LyricLibrary.FindSholawats"/>); bagian yang belum ada dicari online hanya bila
+    /// <paramref name="searchOnline"/> (<see cref="AppSettings.SearchLyricsOnline"/>), lalu disimpan ke
+    /// <c>library/cache</c>. Hasil online belum ada di <paramref name="library"/> — tambahkan ke korpus AsrMatcher
+    /// (atau muat ulang pustaka). Kegagalan jaringan → hasil lebih sedikit, tidak melempar.
+    /// </summary>
+    public static async Task<IReadOnlyList<Sholawat>> ResolveKnownAsync(
+        LyricLibrary library, string libraryDir, MediaContext media, bool searchOnline, Action<string>? trace = null)
+    {
+        var parts = TitleParts(media.Title);
+        var found = parts.Select(p => (Part: p, Sholawat: library.FindPart(p))).ToList();
+        var missing = found.Where(x => x.Sholawat is null).Select(x => x.Part).ToList();
+        var fetched = new List<FetchedLyrics>();
+        if (searchOnline && missing.Count > 0)
+        {
+            // Description video sendiri hanya bila pustaka tidak menutup bagian mana pun: bloknya tidak bisa
+            // dipetakan ke bagian judul dan bisa menggandakan teks pustaka
+            var description = found.Any(x => x.Sholawat is not null) ? null : media.Description;
+            fetched.AddRange(await FetchAsync(media.Title, description, media.VideoId, trace, missing));
+            foreach (var f in fetched)
+                Save(f, LyricLibrary.CacheDir(libraryDir), trace);
+        }
+
+        // Urut judul; hasil description (judul = judul media utuh) di belakang
+        var result = new List<Sholawat>();
+        foreach (var (part, s) in found)
+        {
+            var text = s ?? fetched.Where(f => f.Title == part).Select(ToSholawat).FirstOrDefault();
+            if (text is not null && result.All(r => r.Id != text.Id))
+                result.Add(text);
+        }
+        foreach (var f in fetched.Where(f => !parts.Contains(f.Title)))
+        {
+            if (ToSholawat(f) is var text && result.All(r => r.Id != text.Id))
+                result.Add(text);
+        }
+        return result;
+    }
+
     /// <param name="description">Description video yang sedang diputar (langkah 3), bila ada.</param>
     /// <param name="videoId">Video yang diputar: tidak dihitung ulang sebagai kandidat pencarian.</param>
+    /// <param name="parts">Bagian judul yang dicari; null = semua <see cref="TitleParts"/>.</param>
     /// <returns>Satu hasil per bagian judul yang ditemukan teksnya (kosong = tidak ditemukan).</returns>
     public static async Task<IReadOnlyList<FetchedLyrics>> FetchAsync(
-        string mediaTitle, string? description, string? videoId, Action<string>? trace = null)
+        string mediaTitle, string? description, string? videoId, Action<string>? trace = null,
+        IReadOnlyList<string>? parts = null)
     {
-        var parts = TitleParts(mediaTitle);
+        parts ??= TitleParts(mediaTitle);
         trace?.Invoke($"bagian judul: {string.Join(" | ", parts.Select(p => $"\"{p}\""))}");
 
         if (!string.IsNullOrWhiteSpace(description))
@@ -511,22 +553,38 @@ public static partial class LyricFetcher
         return s;
     }
 
+    private const string CacheLicense = "cache lokal hasil pencarian online — milik sumber aslinya, jangan dibundel/disebarkan";
+
+    /// <summary>Id pustaka hasil fetch: "web-" + kunci judul (sama dengan nama berkas cache <see cref="Save"/>).</summary>
+    public static string CacheId(string title)
+    {
+        var slug = LyricLibrary.TitleKey(title).Replace(' ', '-');
+        foreach (var c in Path.GetInvalidFileNameChars())
+            slug = slug.Replace(c, '-');
+        // Judul tanpa huruf/angka: hash FNV-1a (string.GetHashCode diacak per proses → nama berkas berubah tiap jalan)
+        if (slug.Length == 0)
+            slug = $"{title.Aggregate(2166136261u, (h, c) => (h ^ c) * 16777619u):x8}";
+        return $"web-{slug}";
+    }
+
+    /// <summary>Hasil fetch sebagai <see cref="Sholawat"/> pustaka — id & judul sama dengan berkas <see cref="Save"/>.</summary>
+    public static Sholawat ToSholawat(FetchedLyrics f) =>
+        f.Lyrics.ToSholawat(CacheId(f.Title), CacheTitles(f), f.Source, CacheLicense);
+
+    private static string[] CacheTitles(FetchedLyrics f) =>
+        new[] { f.Title, f.ArabicTitle }.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!).Distinct().ToArray();
+
     /// <summary>Simpan ke <paramref name="dir"/> (biasanya <c>library/cache</c>) dalam format pustaka sholawat;
     /// berkas lama untuk judul yang sama ditimpa. Gagal tulis → null.</summary>
     public static string? Save(FetchedLyrics f, string dir, Action<string>? trace = null)
     {
-        var slug = LyricLibrary.TitleKey(f.Title).Replace(' ', '-');
-        foreach (var c in Path.GetInvalidFileNameChars())
-            slug = slug.Replace(c, '-');
-        if (slug.Length == 0)
-            slug = $"{(uint)f.Title.GetHashCode():x8}";
-        var id = $"web-{slug}";
+        var id = CacheId(f.Title);
         var dto = new
         {
             id,
-            titles = new[] { f.Title, f.ArabicTitle }.Where(t => !string.IsNullOrWhiteSpace(t)).Distinct().ToArray(),
+            titles = CacheTitles(f),
             source = f.Source,
-            license = "cache lokal hasil pencarian online — milik sumber aslinya, jangan dibundel/disebarkan",
+            license = CacheLicense,
             fetched = new
             {
                 at = DateTimeOffset.Now.ToString("O"),
