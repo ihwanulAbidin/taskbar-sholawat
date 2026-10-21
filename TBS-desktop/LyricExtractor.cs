@@ -35,6 +35,11 @@ public static partial class LyricExtractor
 
     private const int MaxLyricWords = 16;
 
+    // Bagian baris tersambung minimal sepanjang ini (tanpa spasi) supaya kata pendek tidak memecah baris sah
+    private const int MinGluedPart = 6;
+
+    private const int MinRepeatRows = 3;
+
     // Penanda batas keras (judul bagian di HTML) — blok lirik tidak boleh menyeberanginya
     internal const string HardBreak = "\f";
 
@@ -128,10 +133,10 @@ public static partial class LyricExtractor
 
     private static ExtractedLyrics Build(List<(string Ar, List<string> After)> rows)
     {
+        rows = SplitGlued(rows);
         var lines = new List<ExtractedLine>();
         var index = new Dictionary<string, int>();
         var order = new List<int>();
-        var counts = new Dictionary<int, int>();
         foreach (var (ar, after) in rows)
         {
             var key = ArabicNormalizer.Normalize(ar);
@@ -148,9 +153,56 @@ public static partial class LyricExtractor
                 lines[i] = lines[i] with { Translation = translation, Latin = latin };
             }
             order.Add(i);
-            counts[i] = counts.GetValueOrDefault(i) + 1;
         }
-        return new ExtractedLyrics(lines, order, counts.Where(kv => kv.Value > 1).Select(kv => kv.Key).Order().ToList());
+        return new ExtractedLyrics(lines, order, RefrainOf(order));
+    }
+
+    /// <summary>Indeks baris yang muncul lebih dari sekali dalam satu putaran: description sering menulis seluruh
+    /// lirik dua kali (dinyanyikan dua kali) — tanpa ini semua baris tampak berulang (uji Ya Tarim 6o9NVDHfa2s:
+    /// 21 dari 23 baris "refrain").</summary>
+    internal static IReadOnlyList<int> RefrainOf(IReadOnlyList<int> order) =>
+        order.Take(Period(order)).GroupBy(i => i).Where(g => g.Count() > 1).Select(g => g.Key).Order().ToList();
+
+    // Panjang putaran terpendek p: order = order[..p] diulang (putaran terakhir boleh terpotong, minimal separuh dan
+    // minimal MinRepeatRows baris — "A B A" tetap refrain A, bukan blok [A, B] diulang)
+    private static int Period(IReadOnlyList<int> order)
+    {
+        for (var p = 1; p < order.Count; p++)
+        {
+            if (order[p] != order[0] || order.Count - p < Math.Max(MinRepeatRows, (p + 1) / 2))
+                continue;
+            var repeats = true;
+            for (var i = p; i < order.Count && repeats; i++)
+                repeats = order[i] == order[i - p];
+            if (repeats)
+                return p;
+        }
+        return order.Count;
+    }
+
+    // Baris yang sumbernya lupa diberi baris baru: "شي لله يا ولي اللهثبت خطا قدميك" = dua baris lain di blok yang
+    // sama tersambung tanpa spasi → dipecah; baris non-Arab sesudahnya ikut bagian kedua
+    private static List<(string Ar, List<string> After)> SplitGlued(List<(string Ar, List<string> After)> rows)
+    {
+        static string Key(string s) => ArabicNormalizer.Normalize(s).Replace(" ", "");
+        var keys = rows.Select(r => Key(r.Ar)).ToHashSet();
+        var result = new List<(string Ar, List<string> After)>(rows.Count);
+        foreach (var row in rows)
+        {
+            var whole = Key(row.Ar);
+            var split = Enumerable.Range(1, Math.Max(0, row.Ar.Length - 1))
+                .Select(i => (Head: row.Ar[..i].Trim(), Tail: row.Ar[i..].Trim()))
+                .FirstOrDefault(x => Key(x.Head) is { Length: >= MinGluedPart } h && h != whole && keys.Contains(h)
+                                     && Key(x.Tail) is { Length: >= MinGluedPart } t && t != whole && keys.Contains(t));
+            if (split.Head is null)
+            {
+                result.Add(row);
+                continue;
+            }
+            result.Add((split.Head, []));
+            result.Add((split.Tail, row.After));
+        }
+        return result;
     }
 
     // Baris sesudah baris Arab: yang paling "Indonesia" = terjemah (bila cukup), satu lainnya = latin
